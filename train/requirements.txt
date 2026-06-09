@@ -1,0 +1,15 @@
+microwakeword @ git+https://github.com/kahrendt/microWakeWord
+torch
+torchaudio
+torchcodec
+datasets
+scipy
+audiomentations>=0.36.0
+tensorboard
+websockets
+mmap_ninja
+pyyaml
+numpy
+tqdm
+# Unpins `attrs` to fix a conflict on some systems; safe to omit if install succeeds without it
+audio-metadata @ git+https://github.com/whatsnowplaying/audio-metadata@d4ebb238e6a401bb1a5aaaac60c9e2b3cb30929f

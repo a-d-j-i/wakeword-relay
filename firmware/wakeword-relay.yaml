@@ -1,0 +1,68 @@
+# =============================================================================
+# Offline wake-word -> relay toggle  (ESP32-S3 N16R8)
+#
+# microWakeWord runs 100% on-device. No Wi-Fi / Home Assistant needed at
+# runtime: mic -> on-device inference -> toggle relay GPIO.
+#
+# Flash over USB:   esphome run wakeword-relay.yaml
+# =============================================================================
+
+esphome:
+  name: wakeword-relay
+
+# --- ESP32-S3 N16R8: 16MB flash, 8MB OCTAL PSRAM. esp-idf is REQUIRED for
+#     micro_wake_word (it won't build under the Arduino framework). ----------
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+# --- The "R8" = 8MB octal PSRAM. micro_wake_word allocates its tensor arena
+#     here, so this block is mandatory on this chip. -------------------------
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO          # watch detections over USB serial: esphome logs wakeword-relay.yaml
+
+# --- I2S microphone (e.g. INMP441 / ICS-43434). These GPIOs are PLACEHOLDERS
+#     -- change to match your wiring. INMP441 SEL->GND = "left" channel. -----
+i2s_audio:
+  - id: i2s_in
+    i2s_lrclk_pin: GPIO2   # WS / LRCL
+    i2s_bclk_pin: GPIO1    # SCK / BCLK
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_in
+    i2s_din_pin: GPIO3     # SD / DOUT from the mic
+    adc_type: external
+    pdm: false
+    sample_rate: 16000     # micro_wake_word requires 16 kHz
+    bits_per_sample: 32bit
+    channel: left
+
+# --- Wake word engine. "okay_nabu" is a prebuilt model pulled at COMPILE time
+#     from github.com/esphome/micro-wake-word-models, then baked into the
+#     firmware -> offline at runtime. Other prebuilt options: hey_jarvis,
+#     hey_mycroft. Swap in a custom-trained .tflite + json later. -----------
+micro_wake_word:
+  microphone: mic
+  models:
+    # Custom-trained "lumus" model. Retrain with train/train.py --phrase lumus.
+    # Tune probability_cutoff in models/lumus.json to trade false-accepts vs misses.
+    - model: models/lumus.json
+  on_wake_word_detected:
+    then:
+      - switch.toggle: relay
+
+# --- Relay output. Placeholder pin -- set to whatever drives your relay. ----
+switch:
+  - platform: gpio
+    id: relay
+    pin: GPIO5
+    internal: true                    # not exposed anywhere; pure local control
+    restore_mode: ALWAYS_OFF          # deterministic OFF at every boot, then toggle on detection

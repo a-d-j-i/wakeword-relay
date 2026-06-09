@@ -1,0 +1,17 @@
+# ESPHome build artifacts
+firmware/.esphome/
+
+# Training data (large, machine-local)
+train/data/
+
+# Python environments
+.venv*/
+venv/
+__pycache__/
+*.pyc
+
+# Secrets
+firmware/secrets.yaml
+
+# IDE
+.idea/
