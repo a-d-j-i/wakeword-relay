@@ -4,7 +4,7 @@ Offline wake-word detection on an ESP32-S3 that toggles a relay. The model runs 
 
 - **`train/`** — CLI pipeline to train a custom INT8 TFLite wake word model
 - **`firmware/`** — ESPHome YAML + model manifest for ESP32-S3 deployment
-- **[Browser tester](docs/index.html)** — load a `.tflite` and test against WAV files or your live mic ([GitHub Pages](../../))
+- **[Browser tester](https://a-d-j-i.github.io/wakeword-relay/)** — load a `.tflite` and test against WAV files or your live mic
 
 ## Hardware
 
@@ -86,7 +86,7 @@ cd docs && python3 -m http.server 8080
 # Open http://localhost:8080
 ```
 
-Or visit the GitHub Pages URL once the repo is published.
+Or visit **https://a-d-j-i.github.io/wakeword-relay/**
 
 Load a `.tflite`, then:
 - **Test WAV file** — per-frame scores, peak, and detected/not
