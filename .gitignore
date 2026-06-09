@@ -15,3 +15,7 @@ firmware/secrets.yaml
 
 # IDE
 .idea/
+
+# AI
+.claude
+.junie
