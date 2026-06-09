@@ -52,12 +52,20 @@ microphone:
 micro_wake_word:
   microphone: mic
   models:
-    # Custom-trained "lumus" model. Retrain with train/train.py --phrase lumus.
-    # Tune probability_cutoff in models/lumus.json to trade false-accepts vs misses.
-    - model: models/lumus.json
+    - model: models/turn_on.json
+    - model: models/turn_off.json
   on_wake_word_detected:
     then:
-      - switch.toggle: relay
+      - if:
+          condition:
+            lambda: 'return wake_word == "turn_on";'
+          then:
+            - switch.turn_on: relay
+      - if:
+          condition:
+            lambda: 'return wake_word == "turn_off";'
+          then:
+            - switch.turn_off: relay
 
 # --- Relay output. Placeholder pin -- set to whatever drives your relay. ----
 switch:

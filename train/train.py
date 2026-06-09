@@ -20,7 +20,6 @@ import argparse
 import os
 import subprocess
 import sys
-import urllib.request  # used for PIPER_MODEL_URL download only
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,10 +35,6 @@ from tqdm import tqdm
 # Directory containing this script — vendored microwakeword/ lives here.
 _TRAIN_DIR = Path(__file__).parent.resolve()
 
-PIPER_MODEL_URL = (
-    "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/"
-    "en_US-libritts_r-medium.pt"
-)
 NEGATIVE_DATASETS_ROOT = "https://huggingface.co/datasets/kahrendt/microwakeword/resolve/main/"
 NEGATIVE_DATASETS = ["dinner_party.zip", "dinner_party_eval.zip", "no_speech.zip", "speech.zip"]
 
@@ -48,12 +43,11 @@ NEGATIVE_DATASETS = ["dinner_party.zip", "dinner_party_eval.zip", "no_speech.zip
 class Paths:
     data_dir: Path
     downloads_dir: Path
+    piper_model_path: Path
     piper_repo_dir: Path = field(init=False)
-    piper_model_path: Path = field(init=False)
 
     def __post_init__(self):
         self.piper_repo_dir = self.downloads_dir / "piper-sample-generator"
-        self.piper_model_path = self.piper_repo_dir / "models" / "en_US-libritts_r-medium.pt"
 
 
 def parse_args():
@@ -76,6 +70,10 @@ def parse_args():
                         "Shared across training runs to avoid re-downloading.")
     p.add_argument("--output_dir", default=None,
                    help="Training output directory (default: <data_dir>/trained_models/wakeword)")
+    p.add_argument("--piper_model", default=None,
+                   help="Path to a Piper TTS voice model (.onnx or .pt). "
+                        "If omitted, the default English .pt model is downloaded automatically. "
+                        "Download any voice from https://huggingface.co/rhasspy/piper-voices")
     p.add_argument("--regen_features", action="store_true",
                    help="Delete and regenerate augmented features even if they exist")
     p.add_argument("--regen_samples", action="store_true",
@@ -83,8 +81,54 @@ def parse_args():
     return p.parse_args()
 
 
-def download_piper_model(paths: Paths) -> Path:
-    """Clone piper-sample-generator (editable install) and download model weights.
+_DEFAULT_PIPER_MODEL_URL = (
+    "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/"
+    "en_US-libritts_r-medium.pt"
+)
+
+
+def resolve_piper_model(piper_model_arg: str | None, downloads_dir: Path) -> Path:
+    """Return the path to the Piper model to use, downloading it if necessary.
+
+    - None → download the default English .pt model from piper-sample-generator releases.
+    - Existing file path → use it as-is.
+    - Voice name (e.g. "es_AR-daniela-high") → download via `python -m piper.download_voices`.
+    """
+    import urllib.request
+
+    if piper_model_arg is None:
+        model_path = downloads_dir / "piper-sample-generator" / "models" / "en_US-libritts_r-medium.pt"
+        if not model_path.exists():
+            print("[setup] Downloading default Piper model (~75MB)...")
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(_DEFAULT_PIPER_MODEL_URL, str(model_path))
+        return model_path
+
+    candidate = Path(piper_model_arg)
+    if candidate.exists():
+        return candidate
+
+    # Treat as a voice name and download via piper.download_voices.
+    voice_dir = downloads_dir / "piper_voices"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    onnx_path = voice_dir / f"{piper_model_arg}.onnx"
+    if not onnx_path.exists():
+        print(f"[setup] Downloading Piper voice '{piper_model_arg}'...")
+        subprocess.run(
+            [sys.executable, "-m", "piper.download_voices",
+             piper_model_arg, "--download-dir", str(voice_dir)],
+            check=True,
+        )
+    if not onnx_path.exists():
+        raise FileNotFoundError(
+            f"Expected {onnx_path} after download — check that '{piper_model_arg}' is a valid voice name. "
+            "Run `python -m piper.download_voices` with no arguments to list available voices."
+        )
+    return onnx_path
+
+
+def setup_piper(paths: Paths) -> None:
+    """Clone and editable-install piper-sample-generator.
 
     The repo's pyproject.toml only bundles piper_sample_generator, not the
     sibling piper_train package that __main__.py requires. An editable install
@@ -103,13 +147,6 @@ def download_piper_model(paths: Paths) -> Path:
             [sys.executable, "-m", "pip", "install", "-e", str(paths.piper_repo_dir)],
             check=True,
         )
-
-    if not paths.piper_model_path.exists():
-        print("[setup] Downloading Piper TTS model weights (~75MB)...")
-        paths.piper_model_path.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(PIPER_MODEL_URL, str(paths.piper_model_path))
-
-    return paths.piper_model_path
 
 
 # ---------------------------------------------------------------------------
@@ -493,15 +530,16 @@ if __name__ == "__main__":
 
     data_dir = Path(args.data_dir)
     downloads_dir = Path(args.downloads_dir) if args.downloads_dir else data_dir
-    paths = Paths(data_dir=data_dir, downloads_dir=downloads_dir)
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    piper_model_path = resolve_piper_model(args.piper_model, downloads_dir)
+    paths = Paths(data_dir=data_dir, downloads_dir=downloads_dir, piper_model_path=piper_model_path)
 
     if args.output_dir is None:
         args.output_dir = str(paths.data_dir / "trained_models/wakeword")
 
     paths.data_dir.mkdir(exist_ok=True)
-    paths.downloads_dir.mkdir(exist_ok=True)
 
-    download_piper_model(paths)
+    setup_piper(paths)
     generate_positive_samples(paths, phonetic, args.samples, regen=args.regen_samples)
 
     download_mit_rirs(paths)

@@ -1,0 +1,15 @@
+{
+  "type": "micro",
+  "wake_word": "turn_off",
+  "author": "aadjiman",
+  "model": "turn_off.tflite",
+  "trained_languages": ["es"],
+  "version": 1,
+  "micro": {
+    "probability_cutoff": 0.76,
+    "feature_step_size": 10,
+    "sliding_window_size": 5,
+    "tensor_arena_size": 26080,
+    "minimum_esphome_version": "2024.7.0"
+  }
+}

@@ -56,13 +56,29 @@ python train.py --phrase "hey lumus" --phonetic "hay loo mus" \
 
 # Tune false-positive rate (higher = fewer false activations, lower recall)
 python train.py --phrase "hey jarvis" --neg_class_weight 30
+
+# Train a non-English phrase — pass a Piper voice name to auto-download it
+python train.py --phrase "activa" \
+  --piper_model es_AR-daniela-high \
+  --samples 3000 --steps 30000 --neg_class_weight 25
 ```
+
+`--piper_model` accepts either a path to an existing `.onnx`/`.pt` file, or a Piper voice name (e.g. `es_AR-daniela-high`). Voice names are downloaded automatically via `python -m piper.download_voices` and cached in `<downloads_dir>/piper_voices/`. Run `python -m piper.download_voices` with no arguments to list all available voices. Omit `--piper_model` to use the default English model.
 
 **First run downloads ~10GB** of datasets into `--downloads_dir` (defaults to `--data_dir`, default `train/data/`). Point multiple runs at the same `--downloads_dir` to avoid re-downloading. Use `--regen_features` to force rebuilding augmented spectrograms, `--regen_samples` to regenerate TTS positive samples.
 
 **Output**: `<data_dir>/trained_models/wakeword/tflite_stream_state_internal_quant/stream_state_internal_quant.tflite`
 
-After training, copy the `.tflite` to `firmware/models/` and update `firmware/models/<phrase>.json`. See the [ESPHome docs](https://esphome.io/components/micro_wake_word).
+After training, **only copy the `.tflite` to `firmware/models/`** — no other files need changing. The manifest JSONs are decoupled from the training phrase:
+
+| File | `wake_word` | Purpose |
+|------|-------------|---------|
+| `firmware/models/turn_on.json` | `"turn_on"` | triggers `switch.turn_on` |
+| `firmware/models/turn_off.json` | `"turn_off"` | triggers `switch.turn_off` |
+
+The `wake_word` field in the JSON is what ESPHome matches on — it has nothing to do with `--phrase` used during training. Swap in a new `.tflite` with any phrase and the firmware works unchanged. Tune `probability_cutoff` in each JSON to trade false-accepts vs misses.
+
+See the [ESPHome docs](https://esphome.io/components/micro_wake_word).
 
 ## Firmware (`firmware/`)
 
@@ -72,7 +88,7 @@ esphome run firmware/wakeword-relay.yaml      # compile + flash over USB
 esphome logs firmware/wakeword-relay.yaml     # watch detections
 ```
 
-Current model manifest is `firmware/models/hey_lumus.json`. Tune `probability_cutoff` there to trade false-accepts vs misses (currently `0.76`, being tuned via the browser tester). The old 2-syllable `lumus` model and manifest are kept at `firmware/models/lumus.*` for reference.
+The old English `hey_lumus.*` and `lumus.*` models are kept in `firmware/models/` for reference.
 
 ## Architecture: `train.py` Pipeline
 
