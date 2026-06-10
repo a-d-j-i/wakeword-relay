@@ -120,4 +120,12 @@ if(EMSCRIPTEN)
             ${WWW_DIR}/
         COMMENT "Copying piper_phonemize outputs to www/"
     )
+
+    add_custom_command(TARGET web_trainer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_BINARY_DIR}/web_trainer.js
+            ${CMAKE_CURRENT_BINARY_DIR}/web_trainer.wasm
+            ${WWW_DIR}/
+        COMMENT "Copying web_trainer outputs to www/"
+    )
 endif()

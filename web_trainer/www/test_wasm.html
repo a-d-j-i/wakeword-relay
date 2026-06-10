@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>web_trainer WASM test harness</title>
+</head>
+<body>
+<p id="status">Loading…</p>
+
+<!-- web_trainer WASM: MicroFrontend + MixedNet + Adam + train_step -->
+<script src="web_trainer.js"></script>
+<script>
+'use strict';
+createWebTrainer().then(m => {
+    window.Module = m;
+    window.webTrainerReady = true;
+    document.getElementById('status').textContent = 'WASM ready';
+}).catch(e => {
+    document.getElementById('status').textContent = 'Error: ' + e.message;
+    console.error(e);
+});
+</script>
+</body>
+</html>
