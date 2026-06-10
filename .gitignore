@@ -13,8 +13,24 @@ __pycache__/
 # Secrets
 firmware/secrets.yaml
 
-# web_trainer build output
+# web_trainer build output (WASM binaries, copied to www/ by CMake)
 web_trainer/build/
+web_trainer/build_native/CMakeCache.txt
+web_trainer/build_native/CMakeFiles/
+web_trainer/build_native/Makefile
+web_trainer/build_native/cmake_install.cmake
+web_trainer/build_native/test_phonemize
+web_trainer/build_native/web_trainer
+web_trainer/www/piper_phonemize.js
+web_trainer/www/piper_phonemize.wasm
+web_trainer/www/piper_phonemize.data
+web_trainer/www/web_trainer.js
+web_trainer/www/web_trainer.wasm
+
+# web_trainer JS tooling
+web_trainer/node_modules/
+web_trainer/test-results/
+web_trainer/playwright-report/
 
 # IDE
 .idea/

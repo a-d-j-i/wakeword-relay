@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(web_trainer)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_C_STANDARD 11)
 
 set(FRONTEND_SOURCES
     vendor/micro_frontend/frontend.c
@@ -50,5 +51,73 @@ if(EMSCRIPTEN)
             -sMODULARIZE=1 \
             -sEXPORT_NAME=createWebTrainer \
         "
+    )
+endif()
+
+# ── piper_phonemize ──────────────────────────────────────────────────────────
+# Standalone WASM module: espeak-ng text→IPA phonemes.
+# Embeds minimal en+es data files at virtual path /espeak-ng-data.
+
+set(ESPEAK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/espeak-ng)
+set(ESPEAK_DATA_DIR ${ESPEAK_DIR}/data)
+
+file(GLOB ESPEAK_SOURCES
+    ${ESPEAK_DIR}/libespeak-ng/*.c
+    ${ESPEAK_DIR}/ucd-tools/*.c
+)
+# Exclude optional audio features not needed for phonemization.
+# compiledata.c and compiledict.c export symbols referenced by dictionary.c
+# (debug trace paths), so they stay in despite being primarily build-time tools.
+list(REMOVE_ITEM ESPEAK_SOURCES
+    ${ESPEAK_DIR}/libespeak-ng/compilembrola.c
+    ${ESPEAK_DIR}/libespeak-ng/sPlayer.c
+)
+
+add_executable(piper_phonemize
+    src/phonemize.cpp
+    ${ESPEAK_SOURCES}
+)
+
+target_include_directories(piper_phonemize PRIVATE
+    ${ESPEAK_DIR}/include
+    ${ESPEAK_DIR}/libespeak-ng
+    ${ESPEAK_DIR}/ucd-tools
+)
+
+target_compile_definitions(piper_phonemize PRIVATE
+    LIBESPEAK_NG_EXPORT
+    PATH_ESPEAK_DATA="/espeak-ng-data"
+)
+
+# espeak-ng uses C99 and expects _POSIX_C_SOURCE for some platforms.
+target_compile_options(piper_phonemize PRIVATE
+    -Wno-implicit-function-declaration
+    -Wno-unused-parameter
+)
+
+if(EMSCRIPTEN)
+    set_target_properties(piper_phonemize PROPERTIES
+        SUFFIX ".js"
+        LINK_FLAGS "\
+            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString'] \
+            -sEXPORTED_FUNCTIONS=['_malloc','_free','_phonemize_init','_phonemize','_phonemize_free'] \
+            -sALLOW_MEMORY_GROWTH=1 \
+            -sINITIAL_MEMORY=33554432 \
+            -sENVIRONMENT=web,worker \
+            -sMODULARIZE=1 \
+            -sEXPORT_NAME=createPiperPhonemize \
+            --preload-file ${ESPEAK_DATA_DIR}@/espeak-ng-data \
+        "
+    )
+
+    # Copy WASM outputs to www/ so the HTML page can reference them directly.
+    set(WWW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/www)
+    add_custom_command(TARGET piper_phonemize POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_BINARY_DIR}/piper_phonemize.js
+            ${CMAKE_CURRENT_BINARY_DIR}/piper_phonemize.wasm
+            ${CMAKE_CURRENT_BINARY_DIR}/piper_phonemize.data
+            ${WWW_DIR}/
+        COMMENT "Copying piper_phonemize outputs to www/"
     )
 endif()

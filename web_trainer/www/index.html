@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wake Word Trainer — Piper TTS</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #f8f8f8; color: #222; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.2rem; }
+  h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
+  section { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+  label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.3rem; }
+  input[type=text], input[type=number], select { font-size: 0.95rem; padding: 0.35rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; }
+  input[type=text] { width: 16rem; }
+  button { font-size: 0.95rem; padding: 0.4rem 1rem; border: none; border-radius: 4px; cursor: pointer; background: #2563eb; color: white; }
+  button:disabled { background: #aaa; cursor: default; }
+  .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  .status { font-size: 0.85rem; color: #555; }
+  .ok   { color: #16a34a; }
+  .err  { color: #dc2626; }
+  .file-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  #ipa-out  { font-size: 0.85rem; color: #2563eb; font-family: monospace; min-height: 1.2rem; }
+  #audio-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .audio-item { display: flex; align-items: center; gap: 0.6rem; font-size: 0.82rem; color: #555; }
+  audio { height: 28px; }
+  progress { width: 100%; }
+  a { color: #2563eb; }
+  details summary { cursor: pointer; font-size: 0.85rem; color: #888; }
+  details p { font-size: 0.82rem; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>Wake Word Trainer — Milestone 4: Piper TTS in Browser</h1>
+<p class="status">All computation runs locally. No data leaves your machine.</p>
+
+<!-- Step 1: Load voice model -->
+<section>
+  <h2>1 — Load Piper Voice Model</h2>
+  <details>
+    <summary>Where to get voice models</summary>
+    <p>Download an <code>.onnx</code> file and its companion <code>.onnx.json</code> from the
+    <a href="https://huggingface.co/rhasspy/piper-voices" target="_blank">rhasspy/piper-voices</a>
+    repository on Hugging Face. For English try <code>en/en_US/amy/medium/</code>; for Argentine
+    Spanish try <code>es/es_AR/daniela/high/</code>.</p>
+  </details>
+  <div class="file-row">
+    <div>
+      <label>Model file (.onnx)</label>
+      <input type="file" id="file-model" accept=".onnx">
+    </div>
+    <div>
+      <label>Config file (.onnx.json)</label>
+      <input type="file" id="file-config" accept=".json">
+    </div>
+    <button id="btn-load" disabled>Load</button>
+  </div>
+  <div id="load-status" class="status">Waiting for phonemizer…</div>
+</section>
+
+<!-- Step 2: Generate samples -->
+<section>
+  <h2>2 — Generate Samples</h2>
+  <div class="row">
+    <div>
+      <label>Phrase</label>
+      <input type="text" id="phrase" value="hey lumus">
+    </div>
+    <div>
+      <label>Language</label>
+      <select id="lang">
+        <option value="en">English (en)</option>
+        <option value="es">Spanish (es)</option>
+      </select>
+    </div>
+    <div>
+      <label>Samples</label>
+      <input type="number" id="num-samples" value="10" min="1" max="100" style="width:4rem">
+    </div>
+    <button id="btn-generate" disabled>Generate</button>
+  </div>
+  <div id="ipa-out"></div>
+  <progress id="gen-progress" value="0" max="1" style="display:none"></progress>
+  <div id="gen-status" class="status"></div>
+</section>
+
+<!-- Step 3: Audio output -->
+<section>
+  <h2>3 — Generated Audio</h2>
+  <div id="audio-list"><span class="status">Nothing generated yet.</span></div>
+</section>
+
+<!-- WASM modules -->
+<script src="piper_phonemize.js"></script>
+
+<!-- onnxruntime-web (CDN). To vendor: npm pack onnxruntime-web and copy dist/ here. -->
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+
+<!-- Piper synthesis pipeline -->
+<script src="js/piper.js"></script>
+
+<script>
+'use strict';
+
+// Point ort at the CDN for its own WASM backends.
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
+
+let ortSession   = null;
+let voiceConfig  = null;
+
+const fileModel   = document.getElementById('file-model');
+const fileConfig  = document.getElementById('file-config');
+const btnLoad     = document.getElementById('btn-load');
+const loadStatus  = document.getElementById('load-status');
+const phrase      = document.getElementById('phrase');
+const langSelect  = document.getElementById('lang');
+const numSamples  = document.getElementById('num-samples');
+const btnGenerate = document.getElementById('btn-generate');
+const ipaOut      = document.getElementById('ipa-out');
+const genProgress = document.getElementById('gen-progress');
+const genStatus   = document.getElementById('gen-status');
+const audioList   = document.getElementById('audio-list');
+
+// Enable Load button once both files are selected.
+function checkFiles() {
+    btnLoad.disabled = !(fileModel.files.length && fileConfig.files.length);
+}
+fileModel.addEventListener('change', checkFiles);
+fileConfig.addEventListener('change', checkFiles);
+
+// Load model + config.
+btnLoad.addEventListener('click', async () => {
+    btnLoad.disabled = true;
+    loadStatus.textContent = 'Loading…';
+    loadStatus.className = 'status';
+    try {
+        const [modelBuf, configText] = await Promise.all([
+            fileModel.files[0].arrayBuffer(),
+            fileConfig.files[0].text(),
+        ]);
+        voiceConfig = JSON.parse(configText);
+        ortSession  = await ort.InferenceSession.create(modelBuf, {
+            executionProviders: ['wasm'],
+        });
+        loadStatus.textContent = '✓ Model loaded — ' + voiceConfig.audio.sample_rate + ' Hz, ' +
+            (voiceConfig.num_speakers ?? 1) + ' speaker(s)';
+        loadStatus.className = 'status ok';
+        btnGenerate.disabled = false;
+    } catch (e) {
+        loadStatus.textContent = 'Error: ' + e.message;
+        loadStatus.className = 'status err';
+        btnLoad.disabled = false;
+    }
+});
+
+// Generate samples.
+btnGenerate.addEventListener('click', async () => {
+    if (!ortSession || !voiceConfig) return;
+
+    btnGenerate.disabled = true;
+    audioList.innerHTML = '';
+    ipaOut.textContent  = '';
+    genStatus.textContent = '';
+    genProgress.style.display = 'block';
+    genProgress.value = 0;
+    genProgress.max   = 1;
+
+    const text  = phrase.value.trim();
+    const lang  = langSelect.value;
+    const count = Math.max(1, parseInt(numSamples.value) || 10);
+
+    try {
+        // Show IPA on first synthesis.
+        const ipa = textToIpa(text, lang);
+        ipaOut.textContent = 'IPA: ' + ipa;
+
+        const samples = await generateSamples(
+            ortSession, voiceConfig, text, lang, count,
+            (done, total) => {
+                genProgress.value = done;
+                genProgress.max   = total;
+                genStatus.textContent = done + ' / ' + total;
+            }
+        );
+
+        audioList.innerHTML = '';
+        samples.forEach((s, i) => {
+            const url  = URL.createObjectURL(s.wav);
+            const item = document.createElement('div');
+            item.className = 'audio-item';
+            item.innerHTML =
+                '<span style="width:2rem; text-align:right; color:#888">' + (i + 1) + '</span>' +
+                '<audio controls src="' + url + '"></audio>' +
+                '<span>noise=' + s.noiseScale.toFixed(2) +
+                ' speed=' + s.lengthScale.toFixed(2) +
+                ' pitch=' + s.noiseW.toFixed(2) + '</span>' +
+                '<a href="' + url + '" download="sample_' + (i + 1) + '.wav">↓</a>';
+            audioList.appendChild(item);
+        });
+
+        genStatus.textContent = count + ' samples generated.';
+        genStatus.className = 'status ok';
+    } catch (e) {
+        genStatus.textContent = 'Error: ' + e.message;
+        genStatus.className = 'status err';
+        console.error(e);
+    } finally {
+        genProgress.style.display = 'none';
+        btnGenerate.disabled = false;
+    }
+});
+
+// Initialise phonemizer WASM on page load.
+initPhonemizer()
+    .then(() => {
+        loadStatus.textContent = 'Phonemizer ready. Select model files above.';
+        loadStatus.className = 'status ok';
+    })
+    .catch(e => {
+        loadStatus.textContent = 'Phonemizer init failed: ' + e.message;
+        loadStatus.className = 'status err';
+    });
+</script>
+</body>
+</html>
