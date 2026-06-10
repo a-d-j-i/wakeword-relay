@@ -330,6 +330,91 @@ negClearBtn.addEventListener('click', async () => {
 
 negInit();
 
+// ── Train tab — background noise ──────────────────────────────────────────────
+
+let noiseParsed = null;
+
+const noiseStatus   = document.getElementById('noise-status');
+const noiseBadge    = document.getElementById('noise-badge');
+const noiseFile     = document.getElementById('noise-file');
+const noiseUrlInput = document.getElementById('noise-url');
+const noiseDlBtn    = document.getElementById('noise-dl-btn');
+const noiseProgress = document.getElementById('noise-progress');
+const noiseClearBtn = document.getElementById('noise-clear-btn');
+
+function noiseSetStatus(text, cls) {
+    noiseStatus.textContent = text;
+    noiseStatus.className   = 'status' + (cls ? ' ' + cls : '');
+}
+
+function noiseUpdateCached(parsed) {
+    const secs = (parsed.clipSamples / parsed.sampleRate).toFixed(1);
+    noiseSetStatus(`Cached — ${parsed.numClips} clips × ${secs} s @ ${parsed.sampleRate} Hz`, 'ok');
+    noiseBadge.textContent = 'cached';
+    noiseClearBtn.style.display = '';
+}
+
+async function noiseSetup() {
+    try {
+        noiseParsed = await noiseInit();
+        if (noiseParsed) {
+            noiseUpdateCached(noiseParsed);
+        } else {
+            noiseSetStatus('Not cached. Load a noise.bin bundle or paste a download URL.');
+            noiseBadge.textContent = 'not cached';
+        }
+    } catch (e) {
+        noiseSetStatus('OPFS unavailable: ' + e.message, 'err');
+    }
+}
+
+noiseFile.addEventListener('change', async () => {
+    const file = noiseFile.files[0];
+    if (!file) return;
+    noiseSetStatus('Loading…');
+    try {
+        const buf = await file.arrayBuffer();
+        noiseParsed = noiseParseBundle(buf);
+        await noiseStoreToOPFS(buf);
+        noiseUpdateCached(noiseParsed);
+    } catch (e) {
+        noiseSetStatus('Error: ' + e.message, 'err');
+    }
+    noiseFile.value = '';
+});
+
+noiseDlBtn.addEventListener('click', async () => {
+    const url = noiseUrlInput.value.trim();
+    if (!url) { noiseSetStatus('Paste a bundle URL first.', 'err'); return; }
+    noiseDlBtn.disabled          = true;
+    noiseProgress.style.display  = '';
+    noiseProgress.value          = 0;
+    noiseProgress.max            = 1;
+    noiseSetStatus('Downloading…');
+    try {
+        noiseParsed = await noiseDownload(url, (loaded, total) => {
+            if (total) { noiseProgress.value = loaded; noiseProgress.max = total; }
+            noiseSetStatus(`Downloading… ${(loaded / 1024 / 1024).toFixed(1)} MB`);
+        });
+        noiseUpdateCached(noiseParsed);
+    } catch (e) {
+        noiseSetStatus('Download failed: ' + e.message, 'err');
+    } finally {
+        noiseProgress.style.display = 'none';
+        noiseDlBtn.disabled = false;
+    }
+});
+
+noiseClearBtn.addEventListener('click', async () => {
+    await noiseClearOPFS();
+    noiseParsed = null;
+    noiseSetStatus('Cache cleared. Load a bundle to continue.');
+    noiseBadge.textContent = 'not cached';
+    noiseClearBtn.style.display = 'none';
+});
+
+noiseSetup();
+
 // ── Augment tab ───────────────────────────────────────────────────────────────
 
 augRunBtn.addEventListener('click', async () => {
@@ -365,9 +450,13 @@ augRunBtn.addEventListener('click', async () => {
 
         const semitones = parseFloat(pitchSlider.value);
 
+        const noiseClips = (noiseCheck.checked && noiseParsed)
+            ? [noiseGetSample(noiseParsed)]
+            : [];
+
         const augmented = augmentSample(s16k, 16000, {
             irs: selectedIR,
-            noises: [],
+            noises: noiseClips,
             pitchProb:    Math.abs(semitones) > 0.01 ? 1.0 : 0.0,
             eqProb:       eqCheck.checked ? 1.0 : 0.0,
             reverbProb:   selectedIR.length > 0 ? 1.0 : 0.0,
