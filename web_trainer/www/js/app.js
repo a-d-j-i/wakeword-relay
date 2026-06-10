@@ -26,6 +26,30 @@ initPhonemizer()
         document.getElementById('load-status').className = 'status err';
     });
 
+// ── Training prereqs display ──────────────────────────────────────────────────
+
+const prereqTts   = document.getElementById('prereq-tts');
+const prereqNeg   = document.getElementById('prereq-neg');
+const prereqNoise = document.getElementById('prereq-noise');
+const trainPrepareBtn = document.getElementById('train-prepare-btn');
+
+function updatePrereqs() {
+    const hasTts   = ortSession !== null;
+    const hasNeg   = negCats   !== null;
+    const hasNoise = noiseParsed !== null;
+
+    prereqTts.textContent = hasTts ? '✓ TTS loaded' : '✗ TTS: load model on TTS tab';
+    prereqTts.className   = 'badge ' + (hasTts ? 'prereq-ok' : 'prereq-warn');
+
+    prereqNeg.textContent = hasNeg ? '✓ Negatives cached' : '✗ Negatives: load on Train tab';
+    prereqNeg.className   = 'badge ' + (hasNeg ? 'prereq-ok' : 'prereq-warn');
+
+    prereqNoise.textContent = hasNoise ? '✓ Noise cached' : '○ Noise: optional';
+    prereqNoise.className   = 'badge' + (hasNoise ? ' prereq-ok' : '');
+
+    trainPrepareBtn.disabled = !(hasTts && hasNeg);
+}
+
 // web_trainer WASM — used by Frontend and Augment tabs for spectrograms.
 createWebTrainer().then(m => {
     window.Module = m;
@@ -112,6 +136,7 @@ btnLoad.addEventListener('click', async () => {
             (voiceConfig.num_speakers ?? 1) + ' speaker(s)';
         loadStatus.className = 'status ok';
         btnGenerate.disabled = false;
+        updatePrereqs();
     } catch (e) {
         loadStatus.textContent = 'Error: ' + e.message;
         loadStatus.className = 'status err';
@@ -277,6 +302,7 @@ async function negInit() {
     } catch (e) {
         negSetStatus('IndexedDB unavailable: ' + e.message, 'err');
     }
+    updatePrereqs();
 }
 
 negFile.addEventListener('change', async () => {
@@ -290,6 +316,7 @@ negFile.addEventListener('change', async () => {
         negCats = await negLoad(negDB);
         const info = await negInfo(negDB);
         negUpdateCached(info);
+        updatePrereqs();
     } catch (e) {
         negSetStatus('Error: ' + e.message, 'err');
     }
@@ -311,6 +338,7 @@ negDlBtn.addEventListener('click', async () => {
         });
         const info = await negInfo(negDB);
         negUpdateCached(info);
+        updatePrereqs();
     } catch (e) {
         negSetStatus('Download failed: ' + e.message, 'err');
     } finally {
@@ -366,6 +394,7 @@ async function noiseSetup() {
     } catch (e) {
         noiseSetStatus('OPFS unavailable: ' + e.message, 'err');
     }
+    updatePrereqs();
 }
 
 noiseFile.addEventListener('change', async () => {
@@ -377,6 +406,7 @@ noiseFile.addEventListener('change', async () => {
         noiseParsed = noiseParseBundle(buf);
         await noiseStoreToOPFS(buf);
         noiseUpdateCached(noiseParsed);
+        updatePrereqs();
     } catch (e) {
         noiseSetStatus('Error: ' + e.message, 'err');
     }
@@ -397,6 +427,7 @@ noiseDlBtn.addEventListener('click', async () => {
             noiseSetStatus(`Downloading… ${(loaded / 1024 / 1024).toFixed(1)} MB`);
         });
         noiseUpdateCached(noiseParsed);
+        updatePrereqs();
     } catch (e) {
         noiseSetStatus('Download failed: ' + e.message, 'err');
     } finally {
@@ -411,6 +442,7 @@ noiseClearBtn.addEventListener('click', async () => {
     noiseSetStatus('Cache cleared. Load a bundle to continue.');
     noiseBadge.textContent = 'not cached';
     noiseClearBtn.style.display = 'none';
+    updatePrereqs();
 });
 
 noiseSetup();
@@ -479,4 +511,246 @@ augRunBtn.addEventListener('click', async () => {
     } finally {
         augRunBtn.disabled = false;
     }
+});
+
+// ── Train tab — training loop ─────────────────────────────────────────────────
+
+let _trainNet    = null;   // WASM MixedNet pointer
+let _trainAdam   = null;   // WASM Adam pointer
+let _posWavs     = [];     // decoded positive samples: { samples: Float32Array, sampleRate }[]
+let _lossHistory = [];     // per-step smoothed loss values (for chart)
+let _abortFlag   = false;
+
+const trainStartBtn   = document.getElementById('train-start-btn');
+const trainStopBtn    = document.getElementById('train-stop-btn');
+const trainExportBtn  = document.getElementById('train-export-btn');
+const trainStatus     = document.getElementById('train-status');
+const trainProgress   = document.getElementById('train-progress');
+const trainLossWrap   = document.getElementById('train-loss-wrap');
+const trainLossCanvas = document.getElementById('train-loss-canvas');
+const trainPhraseIn   = document.getElementById('train-phrase');
+const trainLangSel    = document.getElementById('train-lang');
+const trainPosSamples = document.getElementById('train-pos-samples');
+const trainStepsIn    = document.getElementById('train-steps');
+const trainNegRatio   = document.getElementById('train-neg-ratio');
+const trainLrIn       = document.getElementById('train-lr');
+
+// ── Loss chart ────────────────────────────────────────────────────────────────
+
+function _smoothLoss(raw, win = 20) {
+    const out = [];
+    let sum = 0;
+    const buf = [];
+    for (const v of raw) {
+        buf.push(v); sum += v;
+        if (buf.length > win) sum -= buf.shift();
+        out.push(sum / buf.length);
+    }
+    return out;
+}
+
+function drawLossChart(canvas, losses) {
+    const W = canvas.width  = canvas.offsetWidth || 600;
+    const H = canvas.height = 120;
+    if (losses.length < 2) return;
+
+    const ctx = canvas.getContext('2d');
+    const pad = { l: 46, r: 10, t: 8, b: 22 };
+    const iW  = W - pad.l - pad.r;
+    const iH  = H - pad.t - pad.b;
+
+    let lo = Infinity, hi = -Infinity;
+    for (const v of losses) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (hi <= lo) { lo -= 0.05; hi += 0.05; }
+    const span = hi - lo;
+    lo -= span * 0.05; hi += span * 0.05;
+
+    const xOf = i => pad.l + (i / (losses.length - 1)) * iW;
+    const yOf = v => pad.t + (1 - (v - lo) / (hi - lo)) * iH;
+
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+        const y = pad.t + g * iH / 4;
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + iW, y); ctx.stroke();
+        ctx.fillStyle = '#aaa'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+        ctx.fillText((hi - g * (hi - lo) / 4).toFixed(3), pad.l - 3, y + 3);
+    }
+
+    ctx.beginPath(); ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 1.5;
+    ctx.moveTo(xOf(0), yOf(losses[0]));
+    for (let i = 1; i < losses.length; i++) ctx.lineTo(xOf(i), yOf(losses[i]));
+    ctx.stroke();
+
+    ctx.fillStyle = '#888'; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(`step (${losses.length})`, pad.l + iW / 2, H - 4);
+}
+
+// ── Prepare phase ─────────────────────────────────────────────────────────────
+
+trainPrepareBtn.addEventListener('click', async () => {
+    if (!ortSession || !voiceConfig || !negCats) {
+        trainStatus.textContent = 'Prerequisites not met — check status badges above.';
+        trainStatus.className = 'status err';
+        return;
+    }
+
+    trainPrepareBtn.disabled = true;
+    trainStartBtn.disabled   = true;
+    trainProgress.style.display = '';
+    trainProgress.value = 0;
+    const count = Math.max(5, parseInt(trainPosSamples.value) || 50);
+    trainProgress.max = count;
+    trainStatus.textContent = 'Generating TTS samples…';
+    trainStatus.className = 'status';
+
+    try {
+        await ensureIRs();   // lazy-load impulse responses for augmentation
+
+        const raw = await generateSamples(
+            ortSession, voiceConfig,
+            trainPhraseIn.value.trim() || 'hey lumus',
+            trainLangSel.value,
+            count,
+            (done, total) => {
+                trainProgress.value = done;
+                trainProgress.max   = total;
+                trainStatus.textContent = `Generating TTS… ${done} / ${total}`;
+            }
+        );
+
+        _posWavs = [];
+        for (const s of raw) {
+            const buf = await s.wav.arrayBuffer();
+            _posWavs.push(loadWav(buf));
+        }
+
+        trainStatus.textContent = `Ready — ${_posWavs.length} samples generated. Click "Start Training".`;
+        trainStatus.className = 'status ok';
+        trainStartBtn.disabled = false;
+    } catch (e) {
+        trainStatus.textContent = 'Prepare failed: ' + e.message;
+        trainStatus.className = 'status err';
+        console.error(e);
+    } finally {
+        trainProgress.style.display = 'none';
+        trainPrepareBtn.disabled = false;
+    }
+});
+
+// ── Training loop ─────────────────────────────────────────────────────────────
+
+const _NEG_CATS = ['speech', 'no_speech', 'dinner_party'];
+
+function _resample(samples, srcRate) {
+    if (srcRate === 16000) return samples;
+    const r = srcRate / 16000;
+    const n = Math.round(samples.length / r);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        const pos = i * r;
+        const i0  = Math.floor(pos);
+        const i1  = Math.min(i0 + 1, samples.length - 1);
+        out[i] = samples[i0] * (1 - (pos - i0)) + samples[i1] * (pos - i0);
+    }
+    return out;
+}
+
+trainStartBtn.addEventListener('click', async () => {
+    if (_posWavs.length === 0 || !negCats) return;
+
+    const numSteps  = Math.max(1, parseInt(trainStepsIn.value)  || 1000);
+    const negPerPos = Math.max(1, parseInt(trainNegRatio.value) || 5);
+    const lr        = parseFloat(trainLrIn.value) || 1e-3;
+
+    // Reset state
+    if (_trainNet) trainDestroy(_trainNet, _trainAdam);
+    _lossHistory = [];
+    _abortFlag   = false;
+
+    const { net, adam } = trainCreate(lr);
+    _trainNet = net; _trainAdam = adam;
+
+    trainStartBtn.disabled  = true;
+    trainPrepareBtn.disabled = true;
+    trainStopBtn.disabled   = false;
+    trainExportBtn.disabled = false;
+    trainProgress.style.display = '';
+    trainProgress.value = 0;
+    trainProgress.max   = numSteps;
+    trainLossWrap.style.display = '';
+
+    for (let step = 0; step < numSteps && !_abortFlag; step++) {
+        // Positive step
+        const wav  = _posWavs[Math.floor(Math.random() * _posWavs.length)];
+        const s16k = _resample(wav.samples, wav.sampleRate);
+        const aug  = augmentSample(s16k, 16000, {
+            irs:        loadedIRs || [],
+            noises:     noiseParsed ? [noiseGetSample(noiseParsed)] : [],
+            pitchProb:  0.5,
+            eqProb:     0.5,
+            reverbProb: loadedIRs && loadedIRs.length > 0 ? 0.5 : 0.0,
+            noiseProb:  noiseParsed ? 0.75 : 0.0,
+            gainRange:  [-45, 0],
+        });
+        const feat = audioToFloat32Spec(aug, 16000);
+        if (!feat) continue;
+
+        const posLoss = trainStep(_trainNet, _trainAdam, feat.spectrogram, feat.T, 1.0);
+
+        // Negative steps
+        let negLossSum = 0;
+        for (let j = 0; j < negPerPos; j++) {
+            const cat  = _NEG_CATS[Math.floor(Math.random() * _NEG_CATS.length)];
+            const spec = negGetSample(negCats, cat);  // Float32Array(160×40), already scaled
+            negLossSum += trainStep(_trainNet, _trainAdam, spec, 160, 0.0);
+        }
+
+        _lossHistory.push((posLoss + negLossSum / negPerPos) / 2);
+
+        if (step % 10 === 0) {
+            trainProgress.value = step + 1;
+            const loss = _lossHistory[_lossHistory.length - 1];
+            trainStatus.textContent = `Step ${step + 1} / ${numSteps} — loss ${loss.toFixed(4)}`;
+            trainStatus.className = 'status';
+            drawLossChart(trainLossCanvas, _smoothLoss(_lossHistory));
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+
+    // Final chart
+    if (_lossHistory.length > 0) drawLossChart(trainLossCanvas, _smoothLoss(_lossHistory));
+    trainProgress.style.display = 'none';
+    trainStatus.textContent = _abortFlag
+        ? `Stopped at step ${_lossHistory.length} — loss ${_lossHistory[_lossHistory.length - 1]?.toFixed(4) ?? '?'}`
+        : `Training complete — ${_lossHistory.length} steps, final loss ${_lossHistory[_lossHistory.length - 1]?.toFixed(4) ?? '?'}`;
+    trainStatus.className = 'status ok';
+    trainStartBtn.disabled  = false;
+    trainPrepareBtn.disabled = false;
+    trainStopBtn.disabled   = true;
+});
+
+trainStopBtn.addEventListener('click', () => { _abortFlag = true; });
+
+// ── Export weights ────────────────────────────────────────────────────────────
+
+trainExportBtn.addEventListener('click', () => {
+    if (!_trainNet) return;
+
+    const params = trainGetParams(_trainNet);
+
+    // Bundle format: magic "MWWW" + uint32 num_params + float32[] weights
+    const buf = new ArrayBuffer(8 + params.byteLength);
+    const dv  = new DataView(buf);
+    dv.setUint8(0, 0x4D); dv.setUint8(1, 0x57);   // "MW"
+    dv.setUint8(2, 0x57); dv.setUint8(3, 0x57);   // "WW"
+    dv.setUint32(4, params.length, true);
+    new Float32Array(buf, 8).set(params);
+
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'wakeword_weights.bin'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
 });

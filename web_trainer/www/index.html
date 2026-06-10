@@ -88,6 +88,13 @@
 
   details summary { cursor: pointer; font-size: 0.82rem; color: #888; }
   details p { font-size: 0.8rem; color: #666; }
+
+  /* Training loop */
+  .prereq-ok   { background: #dcfce7; color: #166534; }
+  .prereq-warn { background: #fef3c7; color: #92400e; }
+  #train-loss-canvas { display: block; width: 100%; height: 120px;
+                       border: 1px solid #ddd; border-radius: 3px; }
+  #train-progress { width: 100%; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -99,7 +106,7 @@
   <button class="tab-btn active" data-tab="frontend" role="tab">Frontend</button>
   <button class="tab-btn" data-tab="tts" role="tab">TTS</button>
   <button class="tab-btn" data-tab="augment" role="tab">Augment</button>
-  <button class="tab-btn" data-tab="train" role="tab">Train <span class="badge">M6.5✓</span></button>
+  <button class="tab-btn" data-tab="train" role="tab">Train <span class="badge">M7✓</span></button>
 </nav>
 
 <!-- ══════════════════ FRONTEND TAB ══════════════════ -->
@@ -262,6 +269,65 @@
 <!-- ══════════════════ TRAIN TAB ══════════════════ -->
 <section id="tab-train" class="tab-panel" role="tabpanel">
 
+  <!-- Training loop card -->
+  <div class="card">
+    <h2>Training Loop</h2>
+
+    <div class="row" style="gap:0.5rem;margin-bottom:0.7rem">
+      <span id="prereq-tts"   class="badge prereq-warn">TTS: not loaded</span>
+      <span id="prereq-neg"   class="badge prereq-warn">Negatives: not loaded</span>
+      <span id="prereq-noise" class="badge">Noise: not loaded (optional)</span>
+    </div>
+
+    <div class="row" style="margin-bottom:0.5rem">
+      <div class="col">
+        <label>Phrase</label>
+        <input type="text" id="train-phrase" value="hey lumus">
+      </div>
+      <div class="col">
+        <label>Language</label>
+        <select id="train-lang">
+          <option value="en">English (en)</option>
+          <option value="es">Spanish (es)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row" style="margin-bottom:0.6rem;gap:1.2rem">
+      <div class="col">
+        <label>Positive samples</label>
+        <input type="number" id="train-pos-samples" value="50" min="5" max="500" style="width:5rem">
+      </div>
+      <div class="col">
+        <label>Training steps</label>
+        <input type="number" id="train-steps" value="1000" min="100" max="50000" style="width:6rem">
+      </div>
+      <div class="col">
+        <label>Neg per step</label>
+        <input type="number" id="train-neg-ratio" value="5" min="1" max="20" style="width:4rem">
+      </div>
+      <div class="col">
+        <label>Learning rate</label>
+        <input type="number" id="train-lr" value="0.001" step="0.0001" min="0.00001" style="width:6rem">
+      </div>
+    </div>
+
+    <div class="row" style="gap:0.5rem;margin-top:0.3rem">
+      <button id="train-prepare-btn" disabled>Prepare TTS samples</button>
+      <button id="train-start-btn"   disabled>Start Training</button>
+      <button id="train-stop-btn"    disabled class="secondary">Stop</button>
+      <button id="train-export-btn"  disabled class="secondary">Export weights</button>
+    </div>
+
+    <progress id="train-progress" value="0" max="1" style="display:none"></progress>
+    <p id="train-status" class="status" style="margin-top:0.4rem"></p>
+
+    <div id="train-loss-wrap" style="display:none;margin-top:0.8rem">
+      <canvas id="train-loss-canvas"></canvas>
+      <p class="spec-label">Smoothed loss (window=20, positive + negative average)</p>
+    </div>
+  </div>
+
   <!-- Negative samples card -->
   <div class="card">
     <h2>Negative Samples <span id="neg-badge" class="badge">not cached</span></h2>
@@ -348,8 +414,8 @@
       <li class="done">✓ M5.5 — Tab UI + spectrogram visualisation</li>
       <li class="done">✓ M6 — Negative samples (IndexedDB cache)</li>
       <li class="done">✓ M6.5 — Background noise bundle (OPFS, ~100 MB curated)</li>
-      <li class="next">→ M7 — Training loop UI (loss curve, progress)</li>
-      <li>M8 — Export float32 weights → Python TFLite quantisation</li>
+      <li class="done">✓ M7 — Training loop UI (loss curve, progress, weight export)</li>
+      <li class="next">→ M8 — Python TFLite quantisation from exported weights</li>
     </ul>
   </div>
 
@@ -364,6 +430,7 @@
 <script src="js/spectrogram.js"></script>
 <script src="js/negatives.js"></script>
 <script src="js/noise.js"></script>
+<script src="js/trainer.js"></script>
 <script src="js/app.js"></script>
 
 <script>
