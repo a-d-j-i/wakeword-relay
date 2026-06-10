@@ -13,6 +13,9 @@ __pycache__/
 # Secrets
 firmware/secrets.yaml
 
+# web_trainer build output
+web_trainer/build/
+
 # IDE
 .idea/
 

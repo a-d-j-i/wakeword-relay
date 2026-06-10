@@ -20,8 +20,9 @@ import argparse
 import os
 import subprocess
 import sys
+import urllib.request
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # CPU-only; suppress CUDA init errors
@@ -44,10 +45,6 @@ class Paths:
     data_dir: Path
     downloads_dir: Path
     piper_model_path: Path
-    piper_repo_dir: Path = field(init=False)
-
-    def __post_init__(self):
-        self.piper_repo_dir = self.downloads_dir / "piper-sample-generator"
 
 
 def parse_args():
@@ -94,10 +91,8 @@ def resolve_piper_model(piper_model_arg: str | None, downloads_dir: Path) -> Pat
     - Existing file path → use it as-is.
     - Voice name (e.g. "es_AR-daniela-high") → download via `python -m piper.download_voices`.
     """
-    import urllib.request
-
     if piper_model_arg is None:
-        model_path = downloads_dir / "piper-sample-generator" / "models" / "en_US-libritts_r-medium.pt"
+        model_path = downloads_dir / "piper_models" / "en_US-libritts_r-medium.pt"
         if not model_path.exists():
             print("[setup] Downloading default Piper model (~75MB)...")
             model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,25 +123,7 @@ def resolve_piper_model(piper_model_arg: str | None, downloads_dir: Path) -> Pat
 
 
 def setup_piper(paths: Paths) -> None:
-    """Clone and editable-install piper-sample-generator.
-
-    The repo's pyproject.toml only bundles piper_sample_generator, not the
-    sibling piper_train package that __main__.py requires. An editable install
-    adds the repo root to sys.path via a .pth file, making both packages visible
-    to all subprocesses without needing PYTHONPATH tweaks.
-    """
-    if not paths.piper_repo_dir.exists():
-        print("[setup] Cloning piper-sample-generator...")
-        subprocess.run(
-            ["git", "clone", "https://github.com/rhasspy/piper-sample-generator",
-             str(paths.piper_repo_dir)],
-            check=True,
-        )
-        print("[setup] Installing piper-sample-generator (editable)...")
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", str(paths.piper_repo_dir)],
-            check=True,
-        )
+    pass  # piper_sample_generator and piper_train are vendored into train/
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +148,9 @@ def generate_positive_samples(paths: Paths, phonetic: str, n_samples: int, regen
 
     print(f"[samples] Generating {n_samples} samples for '{phonetic}'...")
     env = os.environ.copy()
-    # piper_train is a sibling package in the repo not exposed by the editable install's
-    # custom finder; adding the repo root to PYTHONPATH makes it importable in subprocesses.
-    env["PYTHONPATH"] = str(paths.piper_repo_dir.resolve()) + (
+    # piper_sample_generator and piper_train are vendored in _TRAIN_DIR; add it to
+    # PYTHONPATH so the subprocess finds both packages without any editable install.
+    env["PYTHONPATH"] = str(_TRAIN_DIR) + (
         f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else ""
     )
     subprocess.run([
@@ -210,47 +187,42 @@ def download_mit_rirs(paths: Paths) -> Path:
     return out_dir
 
 
+_AUDIOSET_N_CLIPS = 500
+
+
 def download_audioset(paths: Paths) -> Path:
-    import tarfile
-    import torchaudio
+    import datasets as hf
 
     out_dir = paths.downloads_dir / "audioset_16k"
     if out_dir.exists() and any(out_dir.iterdir()):
         return out_dir
-
-    audioset_dir = paths.downloads_dir / "audioset"
-    audioset_dir.mkdir(exist_ok=True)
-    tar_path = audioset_dir / "bal_train09.tar"
-    if not tar_path.exists():
-        print("[data] Downloading AudioSet (bal_train09.tar, ~500 clips)...")
-        urllib.request.urlretrieve(
-            "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/bal_train09.tar",
-            str(tar_path),
-        )
-    print("[data] Extracting AudioSet...")
-    with tarfile.open(tar_path, "r") as t:
-        t.extractall(audioset_dir)
-
     out_dir.mkdir(exist_ok=True)
-    print("[data] Converting AudioSet to 16kHz WAV...")
-    flac_files = list((audioset_dir / "audio").glob("**/*.flac"))
-    resampler_cache = {}
-    for p in tqdm(flac_files):
-        name = Path(p).name.replace(".flac", ".wav")
+
+    # Dataset was converted from .tar to Parquet in late 2025; stream to avoid
+    # pulling all 25GB — we only need a few hundred background clips.
+    print(f"[data] Downloading AudioSet ({_AUDIOSET_N_CLIPS} clips, streaming)...")
+    ds = hf.load_dataset(
+        "agkphysics/AudioSet", "balanced", split="train", streaming=True, trust_remote_code=True
+    )
+    for idx, row in enumerate(tqdm(ds, total=_AUDIOSET_N_CLIPS)):
+        if idx >= _AUDIOSET_N_CLIPS:
+            break
         try:
-            waveform, sr = torchaudio.load(str(p))
+            audio = row["audio"]
+            arr = np.array(audio["array"], dtype=np.float32)
+            sr = audio["sampling_rate"]
+            if sr != 16000:
+                import torchaudio
+                import torch
+                waveform = torch.tensor(arr).unsqueeze(0)
+                waveform = torchaudio.functional.resample(waveform, sr, 16000)
+                arr = waveform.squeeze().numpy()
+            scipy.io.wavfile.write(
+                out_dir / f"audioset_{idx:05d}.wav", 16000,
+                (arr * 32767).astype(np.int16),
+            )
         except Exception:
             continue
-        if sr != 16000:
-            if sr not in resampler_cache:
-                resampler_cache[sr] = torchaudio.transforms.Resample(sr, 16000)
-            waveform = resampler_cache[sr](waveform)
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
-        scipy.io.wavfile.write(
-            out_dir / name, 16000,
-            (waveform.squeeze().numpy() * 32767).astype(np.int16),
-        )
     return out_dir
 
 

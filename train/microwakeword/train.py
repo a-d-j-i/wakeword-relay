@@ -19,6 +19,7 @@ import platform
 import contextlib
 
 from absl import logging
+from tqdm import tqdm
 
 import numpy as np
 import tensorflow as tf
@@ -246,7 +247,8 @@ def train(model, config, data_processor):
     best_maximization_quantity = 0.0
     best_no_faph_cutoff = 1.0
 
-    for training_step in range(1, training_steps_max + 1):
+    pbar = tqdm(range(1, training_steps_max + 1), unit="step", desc="Training")
+    for training_step in pbar:
         training_steps_sum = 0
         for i in range(len(training_steps_list)):
             training_steps_sum += training_steps_list[i]
@@ -298,18 +300,7 @@ def train(model, config, data_processor):
             sample_weight=combined_weights,
         )
 
-        # Print the running statistics in the current validation epoch
-        print(
-            "Validation Batch #{:d}: Accuracy = {:.3f}; Recall = {:.3f}; Precision = {:.3f}; Loss = {:.4f}; Mini-Batch #{:d}".format(
-                (training_step // config["eval_step_interval"] + 1),
-                result[1],
-                result[2],
-                result[3],
-                result[9],
-                (training_step % config["eval_step_interval"]),
-            ),
-            end="\r",
-        )
+        pbar.set_postfix(loss=f"{result[9]:.4f}", acc=f"{result[1]:.3f}", recall=f"{result[2]:.3f}")
 
         is_last_step = training_step == training_steps_max
         if (training_step % config["eval_step_interval"]) == 0 or is_last_step:

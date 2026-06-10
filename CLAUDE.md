@@ -94,8 +94,8 @@ The old English `hey_lumus.*` and `lumus.*` models are kept in `firmware/models/
 
 | Stage | Function | Description |
 |-------|----------|-------------|
-| 1 | `download_piper_model()` | Clones `piper-sample-generator` repo + downloads LibriTTS model weights |
-| 2 | `generate_positive_samples()` | Runs `piper-sample-generator` to produce 1000+ TTS WAV clips of the wake phrase |
+| 1 | `setup_piper()` | No-op — `piper_sample_generator` and `piper_train` are vendored into `train/` |
+| 2 | `generate_positive_samples()` | Runs vendored `piper_sample_generator` to produce 1000+ TTS WAV clips of the wake phrase |
 | 3 | `download_mit_rirs()` / `download_audioset()` / `download_fma()` | Downloads room impulse responses and background audio for augmentation |
 | 4 | `download_negative_datasets()` | Downloads pre-generated negative spectrograms (speech, dinner party, silence) from HuggingFace |
 | 5 | `generate_augmented_features()` | Applies 8 augmentation types (EQ, pitch shift, background noise, RIR convolution, etc.) and saves as `RaggedMmap` spectrogram datasets for train/val/test splits |
@@ -108,6 +108,12 @@ The old English `hey_lumus.*` and `lumus.*` models are kept in `firmware/models/
 - MIT RIRs download uses `streaming=True` with no `cast_column` to avoid pulling in `torchcodec` as an audio backend (not in requirements)
 - Negative dataset sampling weights (speech: 10×, dinner party: 10×, no speech: 5×) are critical hyperparameters — adjust if the model has too many false activations
 - Best model weights are selected by maximizing `average_viable_recall` once a target threshold is met
+
+## Vendored packages in `train/`
+
+- **`microwakeword/`** — microWakeWord training framework (patches below)
+- **`piper_sample_generator/`** — TTS sample generator (v3.2.0, from PyPI wheel); includes bundled impulse WAVs in `impulses/`
+- **`piper_train/vits/commons.py`** — VITS utilities required by `piper_sample_generator.__main__`; not distributed in the PyPI wheel, fetched from the git repo
 
 ## Patches in `train/microwakeword/`
 
@@ -137,7 +143,8 @@ Everything lands under `data/` which is git-ignored.
 
 ```
 data/
-  piper-sample-generator/        # Cloned automatically
+  piper_models/                  # Downloaded Piper TTS model weights (.pt or .onnx)
+  piper_voices/                  # Voices downloaded via --piper_model <voice-name>
   generated_samples/             # TTS-generated positive WAV clips
   mit_rirs/                      # Room impulse responses (WAV, 16kHz)
   audioset/                      # Raw AudioSet download
