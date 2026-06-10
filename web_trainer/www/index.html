@@ -3,226 +3,304 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wake Word Trainer — Piper TTS</title>
+<title>Wake Word Trainer</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #f8f8f8; color: #222; }
-  h1 { font-size: 1.4rem; margin-bottom: 0.2rem; }
-  h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
-  section { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
-  label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.3rem; }
-  input[type=text], input[type=number], select { font-size: 0.95rem; padding: 0.35rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; background: #f8f8f8; color: #222; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.15rem; }
+  .tagline { font-size: 0.82rem; color: #888; margin: 0 0 1rem; }
+  h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: #666; margin: 1.2rem 0 0.5rem; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 2px; border-bottom: 2px solid #ddd; margin-bottom: 1.2rem; }
+  .tab-btn { background: #ececec; border: 1px solid #ccc; border-bottom: none; padding: 0.45rem 1.1rem;
+             cursor: pointer; border-radius: 5px 5px 0 0; font-size: 0.9rem; color: #555; }
+  .tab-btn:hover { background: #e2e2e2; }
+  .tab-btn.active { background: white; border-bottom: 2px solid white; margin-bottom: -2px;
+                    font-weight: 600; color: #222; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .badge { font-size: 0.65rem; background: #e0e7ff; color: #3730a3; border-radius: 3px;
+           padding: 1px 4px; margin-left: 3px; vertical-align: middle; }
+
+  /* Cards */
+  .card { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-bottom: 0.8rem; }
+
+  /* Form elements */
+  label { display: block; font-size: 0.82rem; color: #666; margin-bottom: 0.25rem; }
+  input[type=text], input[type=number], select {
+    font-size: 0.9rem; padding: 0.3rem 0.45rem; border: 1px solid #ccc; border-radius: 4px; }
   input[type=text] { width: 16rem; }
-  button { font-size: 0.95rem; padding: 0.4rem 1rem; border: none; border-radius: 4px; cursor: pointer; background: #2563eb; color: white; }
+  input[type=range] { vertical-align: middle; }
+  .range-val { font-size: 0.85rem; font-family: monospace; width: 3rem; display: inline-block; }
+  button { font-size: 0.9rem; padding: 0.38rem 1rem; border: none; border-radius: 4px;
+           cursor: pointer; background: #2563eb; color: white; }
   button:disabled { background: #aaa; cursor: default; }
+  button.secondary { background: #6b7280; }
+
+  /* Status */
+  .status { font-size: 0.82rem; color: #666; }
+  .ok  { color: #16a34a; }
+  .err { color: #dc2626; }
+
+  /* Layout helpers */
   .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
-  .status { font-size: 0.85rem; color: #555; }
-  .ok   { color: #16a34a; }
-  .err  { color: #dc2626; }
+  .col { display: flex; flex-direction: column; gap: 0.3rem; }
   .file-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
-  #ipa-out  { font-size: 0.85rem; color: #2563eb; font-family: monospace; min-height: 1.2rem; }
-  #audio-list { display: flex; flex-direction: column; gap: 0.5rem; }
-  .audio-item { display: flex; align-items: center; gap: 0.6rem; font-size: 0.82rem; color: #555; }
+
+  /* Spectrogram */
+  .spec-wrap { margin-top: 0.5rem; display: none; }
+  canvas.spectrogram { image-rendering: pixelated; width: 100%; height: 80px;
+                       border: 1px solid #ddd; border-radius: 3px; display: block; }
+  .spec-label { font-size: 0.72rem; color: #999; margin-top: 2px; text-align: right; }
+
+  /* Before/after layout */
+  .side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 580px) { .side-by-side { grid-template-columns: 1fr; } }
+
+  /* Audio list */
+  #audio-list { display: flex; flex-direction: column; gap: 0.6rem; }
+  .audio-item { display: flex; flex-direction: column; gap: 0.25rem;
+                background: #fafafa; border: 1px solid #eee; border-radius: 4px; padding: 0.5rem 0.7rem; }
+  .audio-item-top { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .sample-num { font-size: 0.8rem; color: #999; width: 1.8rem; text-align: right; }
+  .sample-params { font-size: 0.78rem; color: #888; font-family: monospace; }
   audio { height: 28px; }
+  a { color: #2563eb; font-size: 0.82rem; }
   progress { width: 100%; }
-  a { color: #2563eb; }
-  details summary { cursor: pointer; font-size: 0.85rem; color: #888; }
-  details p { font-size: 0.82rem; color: #555; }
+
+  /* IPA output */
+  #ipa-out { font-size: 0.82rem; color: #2563eb; font-family: monospace; min-height: 1.1rem; }
+
+  /* Augment sliders */
+  .ctrl-grid { display: grid; grid-template-columns: auto 1fr auto; gap: 0.3rem 0.6rem; align-items: center; }
+  .ctrl-grid label { margin: 0; }
+
+  /* Train placeholder */
+  .milestone-list { list-style: none; padding: 0; }
+  .milestone-list li { padding: 0.4rem 0; border-bottom: 1px solid #eee; font-size: 0.88rem; }
+  .milestone-list li:last-child { border: none; }
+  .done { color: #16a34a; }
+  .next { color: #2563eb; font-weight: 600; }
+
+  details summary { cursor: pointer; font-size: 0.82rem; color: #888; }
+  details p { font-size: 0.8rem; color: #666; }
 </style>
 </head>
 <body>
 
-<h1>Wake Word Trainer — Milestone 4: Piper TTS in Browser</h1>
-<p class="status">All computation runs locally. No data leaves your machine.</p>
+<h1>Wake Word Trainer</h1>
+<p class="tagline">All computation runs locally — no data leaves your machine.</p>
 
-<!-- Step 1: Load voice model -->
-<section>
-  <h2>1 — Load Piper Voice Model</h2>
-  <details>
-    <summary>Where to get voice models</summary>
-    <p>Download an <code>.onnx</code> file and its companion <code>.onnx.json</code> from the
-    <a href="https://huggingface.co/rhasspy/piper-voices" target="_blank">rhasspy/piper-voices</a>
-    repository on Hugging Face. For English try <code>en/en_US/amy/medium/</code>; for Argentine
-    Spanish try <code>es/es_AR/daniela/high/</code>.</p>
-  </details>
-  <div class="file-row">
-    <div>
-      <label>Model file (.onnx)</label>
-      <input type="file" id="file-model" accept=".onnx">
+<nav class="tabs" role="tablist">
+  <button class="tab-btn active" data-tab="frontend" role="tab">Frontend</button>
+  <button class="tab-btn" data-tab="tts" role="tab">TTS</button>
+  <button class="tab-btn" data-tab="augment" role="tab">Augment</button>
+  <button class="tab-btn" data-tab="train" role="tab">Train <span class="badge">M7</span></button>
+</nav>
+
+<!-- ══════════════════ FRONTEND TAB ══════════════════ -->
+<section id="tab-frontend" class="tab-panel active" role="tabpanel">
+  <div class="card">
+    <h2>MicroFrontend — Audio → Filterbank Spectrogram</h2>
+    <p class="status" id="frontend-status">Initialising WASM…</p>
+    <div class="row" style="margin-top:0.6rem">
+      <div class="col">
+        <label>WAV file (any sample rate, mono or stereo)</label>
+        <input type="file" id="fe-file" accept=".wav,audio/*">
+      </div>
     </div>
-    <div>
-      <label>Config file (.onnx.json)</label>
-      <input type="file" id="file-config" accept=".json">
+    <div id="fe-canvas-wrap" class="spec-wrap">
+      <canvas id="fe-canvas" class="spectrogram"></canvas>
+      <p class="spec-label">40 log-mel filterbanks · 10 ms/frame · 16 kHz · PCAN gain</p>
     </div>
-    <button id="btn-load" disabled>Load</button>
+    <p id="fe-stats" class="status" style="margin-top:0.4rem"></p>
   </div>
-  <div id="load-status" class="status">Waiting for phonemizer…</div>
 </section>
 
-<!-- Step 2: Generate samples -->
-<section>
-  <h2>2 — Generate Samples</h2>
-  <div class="row">
-    <div>
-      <label>Phrase</label>
-      <input type="text" id="phrase" value="hey lumus">
+<!-- ══════════════════ TTS TAB ══════════════════ -->
+<section id="tab-tts" class="tab-panel" role="tabpanel">
+
+  <div class="card">
+    <h2>1 — Load Piper Voice Model</h2>
+    <details>
+      <summary>Where to get voice models</summary>
+      <p>Download an <code>.onnx</code> and its <code>.onnx.json</code> from
+      <a href="https://huggingface.co/rhasspy/piper-voices" target="_blank">rhasspy/piper-voices</a>.
+      English: <code>en/en_US/amy/medium/</code> · Spanish: <code>es/es_AR/daniela/high/</code></p>
+    </details>
+    <div class="file-row" style="margin-top:0.5rem">
+      <div>
+        <label>Model file (.onnx)</label>
+        <input type="file" id="file-model" accept=".onnx">
+      </div>
+      <div>
+        <label>Config file (.onnx.json)</label>
+        <input type="file" id="file-config" accept=".json">
+      </div>
+      <button id="btn-load" disabled style="align-self:flex-end">Load</button>
     </div>
-    <div>
-      <label>Language</label>
-      <select id="lang">
-        <option value="en">English (en)</option>
-        <option value="es">Spanish (es)</option>
-      </select>
-    </div>
-    <div>
-      <label>Samples</label>
-      <input type="number" id="num-samples" value="10" min="1" max="100" style="width:4rem">
-    </div>
-    <button id="btn-generate" disabled>Generate</button>
+    <p id="load-status" class="status">Waiting for phonemizer…</p>
   </div>
-  <div id="ipa-out"></div>
-  <progress id="gen-progress" value="0" max="1" style="display:none"></progress>
-  <div id="gen-status" class="status"></div>
+
+  <div class="card">
+    <h2>2 — Generate Samples</h2>
+    <div class="row">
+      <div class="col">
+        <label>Phrase</label>
+        <input type="text" id="phrase" value="hey lumus">
+      </div>
+      <div class="col">
+        <label>Language</label>
+        <select id="lang">
+          <option value="en">English (en)</option>
+          <option value="es">Spanish (es)</option>
+        </select>
+      </div>
+      <div class="col">
+        <label>Samples</label>
+        <input type="number" id="num-samples" value="5" min="1" max="100" style="width:4rem">
+      </div>
+      <button id="btn-generate" disabled style="align-self:flex-end">Generate</button>
+    </div>
+    <p id="ipa-out"></p>
+    <progress id="gen-progress" value="0" max="1" style="display:none"></progress>
+    <p id="gen-status" class="status"></p>
+  </div>
+
+  <div class="card">
+    <h2>3 — Generated Samples</h2>
+    <div id="audio-list"><span class="status">Nothing generated yet.</span></div>
+  </div>
+
 </section>
 
-<!-- Step 3: Audio output -->
-<section>
-  <h2>3 — Generated Audio</h2>
-  <div id="audio-list"><span class="status">Nothing generated yet.</span></div>
+<!-- ══════════════════ AUGMENT TAB ══════════════════ -->
+<section id="tab-augment" class="tab-panel" role="tabpanel">
+  <p id="augment-wasm-status" class="status" style="margin-bottom:0.5rem">Initialising WASM…</p>
+
+  <div class="card">
+    <h2>1 — Load Source Audio</h2>
+    <div class="row">
+      <div class="col">
+        <label>WAV file</label>
+        <input type="file" id="aug-file" accept=".wav,audio/*">
+      </div>
+    </div>
+    <div id="aug-before-wrap" class="spec-wrap">
+      <canvas id="aug-before-canvas" class="spectrogram"></canvas>
+      <p class="spec-label">Original</p>
+    </div>
+    <audio id="aug-before-audio" controls style="width:100%;margin-top:0.5rem;display:none"></audio>
+  </div>
+
+  <div class="card">
+    <h2>2 — Augmentation Controls</h2>
+    <div class="ctrl-grid">
+      <label>Pitch shift</label>
+      <input type="range" id="aug-pitch" min="-3" max="3" step="0.5" value="0">
+      <span class="range-val" id="aug-pitch-val">0</span>
+
+      <label>Noise SNR (dB)</label>
+      <input type="range" id="aug-noise-snr" min="-10" max="20" step="1" value="5">
+      <span class="range-val" id="aug-noise-val">5</span>
+    </div>
+    <div class="row" style="margin-top:0.6rem; gap:1.2rem">
+      <label style="display:flex;align-items:center;gap:0.35rem;margin:0">
+        <input type="checkbox" id="aug-eq"> 7-band EQ
+      </label>
+      <label style="display:flex;align-items:center;gap:0.35rem;margin:0">
+        <input type="checkbox" id="aug-noise-en"> Add noise
+      </label>
+      <div style="display:flex;align-items:center;gap:0.4rem">
+        <label style="margin:0">Reverb</label>
+        <select id="aug-reverb">
+          <option value="none">None</option>
+          <option value="all">Random</option>
+          <option value="0">Acoustic Hall</option>
+          <option value="1">Plate</option>
+          <option value="2">Concrete Room</option>
+          <option value="3">Sanctuary</option>
+          <option value="4">Fat Bass</option>
+          <option value="5">Bathroom</option>
+          <option value="6">Reverse Gate</option>
+          <option value="7">Symphonic</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:0.8rem">
+      <button id="aug-run" disabled>Augment</button>
+      <span id="aug-status" class="status" style="margin-left:0.6rem"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3 — Result</h2>
+    <div class="side-by-side">
+      <div>
+        <p class="status">Original</p>
+        <audio id="aug-before-audio-2" controls style="width:100%"></audio>
+        <div id="aug-before-wrap-2" class="spec-wrap">
+          <canvas id="aug-before-canvas-2" class="spectrogram"></canvas>
+        </div>
+      </div>
+      <div>
+        <p class="status">Augmented</p>
+        <audio id="aug-after-audio" controls style="width:100%"></audio>
+        <div id="aug-after-wrap" class="spec-wrap">
+          <canvas id="aug-after-canvas" class="spectrogram"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </section>
 
-<!-- WASM modules -->
+<!-- ══════════════════ TRAIN TAB ══════════════════ -->
+<section id="tab-train" class="tab-panel" role="tabpanel">
+  <div class="card">
+    <h2>Training Pipeline — Coming in Milestone 7</h2>
+    <p class="status" style="margin-bottom:1rem">
+      The full in-browser training loop wires all prior milestones together:
+      TTS samples → augmentation → MicroFrontend features → MixedNet train_step → loss curve.
+    </p>
+    <ul class="milestone-list">
+      <li class="done">✓ M1 — MicroFrontend WASM (40-channel log-mel filterbank)</li>
+      <li class="done">✓ M2 — MixedNet forward pass in C++/WASM (24,801 params)</li>
+      <li class="done">✓ M3 — Backpropagation + Adam optimiser</li>
+      <li class="done">✓ M4 — Piper TTS in browser (espeak-ng + VITS ONNX)</li>
+      <li class="done">✓ M5 — Augmentation pipeline (pitch · EQ · reverb · noise)</li>
+      <li class="done">✓ M5.5 — Tab UI + spectrogram visualisation</li>
+      <li class="next">→ M6 — Negative samples (HuggingFace, IndexedDB cache)</li>
+      <li>M6.5 — Background noise bundle (OPFS, ~100 MB curated)</li>
+      <li>M7 — Training loop UI (loss curve, progress)</li>
+      <li>M8 — Export float32 weights → Python TFLite quantisation</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ── Scripts ────────────────────────────────────────────────────────────── -->
 <script src="piper_phonemize.js"></script>
-
-<!-- onnxruntime-web (CDN). To vendor: npm pack onnxruntime-web and copy dist/ here. -->
+<script src="web_trainer.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
-
-<!-- Piper synthesis pipeline -->
 <script src="js/piper.js"></script>
-
-<!-- Augmentation pipeline (milestone 5) -->
 <script src="js/augment.js"></script>
+<script src="js/spectrogram.js"></script>
+<script src="js/app.js"></script>
 
 <script>
-'use strict';
-
-// Point ort at the CDN for its own WASM backends.
-ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
-
-let ortSession   = null;
-let voiceConfig  = null;
-
-const fileModel   = document.getElementById('file-model');
-const fileConfig  = document.getElementById('file-config');
-const btnLoad     = document.getElementById('btn-load');
-const loadStatus  = document.getElementById('load-status');
-const phrase      = document.getElementById('phrase');
-const langSelect  = document.getElementById('lang');
-const numSamples  = document.getElementById('num-samples');
-const btnGenerate = document.getElementById('btn-generate');
-const ipaOut      = document.getElementById('ipa-out');
-const genProgress = document.getElementById('gen-progress');
-const genStatus   = document.getElementById('gen-status');
-const audioList   = document.getElementById('audio-list');
-
-// Enable Load button once both files are selected.
-function checkFiles() {
-    btnLoad.disabled = !(fileModel.files.length && fileConfig.files.length);
-}
-fileModel.addEventListener('change', checkFiles);
-fileConfig.addEventListener('change', checkFiles);
-
-// Load model + config.
-btnLoad.addEventListener('click', async () => {
-    btnLoad.disabled = true;
-    loadStatus.textContent = 'Loading…';
-    loadStatus.className = 'status';
-    try {
-        const [modelBuf, configText] = await Promise.all([
-            fileModel.files[0].arrayBuffer(),
-            fileConfig.files[0].text(),
-        ]);
-        voiceConfig = JSON.parse(configText);
-        ortSession  = await ort.InferenceSession.create(modelBuf, {
-            executionProviders: ['wasm'],
-        });
-        loadStatus.textContent = '✓ Model loaded — ' + voiceConfig.audio.sample_rate + ' Hz, ' +
-            (voiceConfig.num_speakers ?? 1) + ' speaker(s)';
-        loadStatus.className = 'status ok';
-        btnGenerate.disabled = false;
-    } catch (e) {
-        loadStatus.textContent = 'Error: ' + e.message;
-        loadStatus.className = 'status err';
-        btnLoad.disabled = false;
+// Wire up the "before" audio player duplication (result card mirrors the source).
+document.getElementById('aug-file').addEventListener('change', () => {
+    const src = document.getElementById('aug-before-audio').src;
+    if (src) {
+        document.getElementById('aug-before-audio-2').src = src;
+        document.getElementById('aug-before-audio-2').style.display = '';
     }
 });
-
-// Generate samples.
-btnGenerate.addEventListener('click', async () => {
-    if (!ortSession || !voiceConfig) return;
-
-    btnGenerate.disabled = true;
-    audioList.innerHTML = '';
-    ipaOut.textContent  = '';
-    genStatus.textContent = '';
-    genProgress.style.display = 'block';
-    genProgress.value = 0;
-    genProgress.max   = 1;
-
-    const text  = phrase.value.trim();
-    const lang  = langSelect.value;
-    const count = Math.max(1, parseInt(numSamples.value) || 10);
-
-    try {
-        // Show IPA on first synthesis.
-        const ipa = textToIpa(text, lang);
-        ipaOut.textContent = 'IPA: ' + ipa;
-
-        const samples = await generateSamples(
-            ortSession, voiceConfig, text, lang, count,
-            (done, total) => {
-                genProgress.value = done;
-                genProgress.max   = total;
-                genStatus.textContent = done + ' / ' + total;
-            }
-        );
-
-        audioList.innerHTML = '';
-        samples.forEach((s, i) => {
-            const url  = URL.createObjectURL(s.wav);
-            const item = document.createElement('div');
-            item.className = 'audio-item';
-            item.innerHTML =
-                '<span style="width:2rem; text-align:right; color:#888">' + (i + 1) + '</span>' +
-                '<audio controls src="' + url + '"></audio>' +
-                '<span>noise=' + s.noiseScale.toFixed(2) +
-                ' speed=' + s.lengthScale.toFixed(2) +
-                ' pitch=' + s.noiseW.toFixed(2) + '</span>' +
-                '<a href="' + url + '" download="sample_' + (i + 1) + '.wav">↓</a>';
-            audioList.appendChild(item);
-        });
-
-        genStatus.textContent = count + ' samples generated.';
-        genStatus.className = 'status ok';
-    } catch (e) {
-        genStatus.textContent = 'Error: ' + e.message;
-        genStatus.className = 'status err';
-        console.error(e);
-    } finally {
-        genProgress.style.display = 'none';
-        btnGenerate.disabled = false;
-    }
+document.getElementById('aug-before-audio').addEventListener('canplay', function() {
+    document.getElementById('aug-before-audio-2').src = this.src;
 });
-
-// Initialise phonemizer WASM on page load.
-initPhonemizer()
-    .then(() => {
-        loadStatus.textContent = 'Phonemizer ready. Select model files above.';
-        loadStatus.className = 'status ok';
-    })
-    .catch(e => {
-        loadStatus.textContent = 'Phonemizer init failed: ' + e.message;
-        loadStatus.className = 'status err';
-    });
 </script>
+
 </body>
 </html>

@@ -43,7 +43,7 @@ if(EMSCRIPTEN)
     set_target_properties(web_trainer PROPERTIES
         SUFFIX ".js"
         LINK_FLAGS "\
-            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap'] \
+            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAP8','HEAPU8','HEAPF32'] \
             -sEXPORTED_FUNCTIONS=['_malloc','_free','_frontend_create','_frontend_process','_frontend_destroy','_frontend_num_features','_mixednet_create','_mixednet_destroy','_mixednet_init_random','_mixednet_num_params','_mixednet_get_params','_mixednet_set_params','_mixednet_forward','_mixednet_min_frames','_adam_create','_adam_destroy','_adam_set_lr','_train_step'] \
             -sALLOW_MEMORY_GROWTH=1 \
             -sINITIAL_MEMORY=67108864 \
