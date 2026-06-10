@@ -236,6 +236,102 @@ augFileInput.addEventListener('change', async () => {
     }
 });
 
+// ── Train tab — negatives ─────────────────────────────────────────────────────
+
+let negDB  = null;
+let negCats = null;   // in-memory categories after load
+
+const negStatus   = document.getElementById('neg-status');
+const negBadge    = document.getElementById('neg-badge');
+const negFile     = document.getElementById('neg-file');
+const negUrlInput = document.getElementById('neg-url');
+const negDlBtn    = document.getElementById('neg-dl-btn');
+const negProgress = document.getElementById('neg-progress');
+const negClearBtn = document.getElementById('neg-clear-btn');
+
+function negSetStatus(text, cls) {
+    negStatus.textContent = text;
+    negStatus.className   = 'status' + (cls ? ' ' + cls : '');
+}
+
+function negUpdateCached(info) {
+    const parts = Object.entries(info)
+        .map(([k, v]) => `${k}: ${v.numSamples.toLocaleString()}`)
+        .join(' · ');
+    negSetStatus(parts ? `Cached — ${parts}` : 'Cache empty.', 'ok');
+    negBadge.textContent = 'cached';
+    negClearBtn.style.display = '';
+}
+
+async function negInit() {
+    try {
+        negDB = await negOpenDB();
+        if (await negHas(negDB)) {
+            const info = await negInfo(negDB);
+            negUpdateCached(info);
+            negCats = await negLoad(negDB);
+        } else {
+            negSetStatus('Not cached. Load a negatives.bin bundle or paste a download URL.');
+            negBadge.textContent = 'not cached';
+        }
+    } catch (e) {
+        negSetStatus('IndexedDB unavailable: ' + e.message, 'err');
+    }
+}
+
+negFile.addEventListener('change', async () => {
+    const file = negFile.files[0];
+    if (!file) return;
+    negSetStatus('Loading…');
+    try {
+        const buf    = await file.arrayBuffer();
+        const parsed = negParseBundle(buf);
+        await negStore(negDB, parsed);
+        negCats = await negLoad(negDB);
+        const info = await negInfo(negDB);
+        negUpdateCached(info);
+    } catch (e) {
+        negSetStatus('Error: ' + e.message, 'err');
+    }
+    negFile.value = '';
+});
+
+negDlBtn.addEventListener('click', async () => {
+    const url = negUrlInput.value.trim();
+    if (!url) { negSetStatus('Paste a bundle URL first.', 'err'); return; }
+    negDlBtn.disabled    = true;
+    negProgress.style.display = '';
+    negProgress.value    = 0;
+    negProgress.max      = 1;
+    negSetStatus('Downloading…');
+    try {
+        negCats = await negDownload(url, negDB, (loaded, total) => {
+            if (total) { negProgress.value = loaded; negProgress.max = total; }
+            negSetStatus(`Downloading… ${(loaded / 1024 / 1024).toFixed(1)} MB`);
+        });
+        const info = await negInfo(negDB);
+        negUpdateCached(info);
+    } catch (e) {
+        negSetStatus('Download failed: ' + e.message, 'err');
+    } finally {
+        negProgress.style.display = 'none';
+        negDlBtn.disabled = false;
+    }
+});
+
+negClearBtn.addEventListener('click', async () => {
+    if (!negDB) return;
+    await negClear(negDB);
+    negCats = null;
+    negSetStatus('Cache cleared. Load a bundle to continue.');
+    negBadge.textContent = 'not cached';
+    negClearBtn.style.display = 'none';
+});
+
+negInit();
+
+// ── Augment tab ───────────────────────────────────────────────────────────────
+
 augRunBtn.addEventListener('click', async () => {
     if (!augSourceSamples) return;
     augRunBtn.disabled = true;
