@@ -515,11 +515,12 @@ augRunBtn.addEventListener('click', async () => {
 
 // ── Train tab — training loop ─────────────────────────────────────────────────
 
-let _trainNet    = null;   // WASM MixedNet pointer
-let _trainAdam   = null;   // WASM Adam pointer
-let _posWavs     = [];     // decoded positive samples: { samples: Float32Array, sampleRate }[]
-let _lossHistory = [];     // per-step smoothed loss values (for chart)
-let _abortFlag   = false;
+let _trainNet       = null;   // WASM MixedNet pointer
+let _trainAdam      = null;   // WASM Adam pointer
+let _trainMinFrames = 157;    // minFrames for current net (pooled=1→157, pooled=0→204)
+let _posWavs        = [];     // decoded positive samples: { samples: Float32Array, sampleRate }[]
+let _lossHistory    = [];     // per-step smoothed loss values (for chart)
+let _abortFlag      = false;
 
 const trainStartBtn   = document.getElementById('train-start-btn');
 const trainStopBtn    = document.getElementById('train-stop-btn');
@@ -534,6 +535,7 @@ const trainPosSamples = document.getElementById('train-pos-samples');
 const trainStepsIn    = document.getElementById('train-steps');
 const trainNegRatio   = document.getElementById('train-neg-ratio');
 const trainLrIn       = document.getElementById('train-lr');
+const trainArchSel    = document.getElementById('train-arch');
 
 // ── Loss chart ────────────────────────────────────────────────────────────────
 
@@ -663,14 +665,15 @@ trainStartBtn.addEventListener('click', async () => {
     const numSteps  = Math.max(1, parseInt(trainStepsIn.value)  || 1000);
     const negPerPos = Math.max(1, parseInt(trainNegRatio.value) || 5);
     const lr        = parseFloat(trainLrIn.value) || 1e-3;
+    const pooled    = trainArchSel ? parseInt(trainArchSel.value) : 1;
 
     // Reset state
     if (_trainNet) trainDestroy(_trainNet, _trainAdam);
     _lossHistory = [];
     _abortFlag   = false;
 
-    const { net, adam } = trainCreate(lr);
-    _trainNet = net; _trainAdam = adam;
+    const { net, adam, minFrames } = trainCreate(lr, pooled);
+    _trainNet = net; _trainAdam = adam; _trainMinFrames = minFrames;
 
     trainStartBtn.disabled  = true;
     trainPrepareBtn.disabled = true;
@@ -694,7 +697,7 @@ trainStartBtn.addEventListener('click', async () => {
             noiseProb:  noiseParsed ? 0.75 : 0.0,
             gainRange:  [-45, 0],
         });
-        const feat = audioToFloat32Spec(aug, 16000);
+        const feat = audioToFloat32Spec(aug, 16000, _trainMinFrames);
         if (!feat) continue;
 
         const posLoss = trainStep(_trainNet, _trainAdam, feat.spectrogram, feat.T, 1.0);
@@ -702,9 +705,17 @@ trainStartBtn.addEventListener('click', async () => {
         // Negative steps
         let negLossSum = 0;
         for (let j = 0; j < negPerPos; j++) {
-            const cat  = _NEG_CATS[Math.floor(Math.random() * _NEG_CATS.length)];
-            const spec = negGetSample(negCats, cat);  // Float32Array(160×40), already scaled
-            negLossSum += trainStep(_trainNet, _trainAdam, spec, 160, 0.0);
+            const cat     = _NEG_CATS[Math.floor(Math.random() * _NEG_CATS.length)];
+            let   spec    = negGetSample(negCats, cat);  // Float32Array(160×40), already scaled
+            let   negT    = 160;
+            // pooled=0 needs exactly minFrames=204; zero-pad if needed
+            if (_trainMinFrames > negT) {
+                const padded = new Float32Array(_trainMinFrames * 40);
+                padded.set(spec);
+                spec = padded;
+                negT = _trainMinFrames;
+            }
+            negLossSum += trainStep(_trainNet, _trainAdam, spec, negT, 0.0);
         }
 
         _lossHistory.push((posLoss + negLossSum / negPerPos) / 2);

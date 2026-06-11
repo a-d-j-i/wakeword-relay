@@ -15,23 +15,37 @@ test.beforeEach(async ({ page }) => {
 
 // ── Architecture sanity ───────────────────────────────────────────────────────
 
-test('mixednet_min_frames returns 157', async ({ page }) => {
-    const n = await page.evaluate(() =>
-        Module.ccall('mixednet_min_frames', 'number', [], []));
+test('mixednet_min_frames returns 157 for pooled=1', async ({ page }) => {
+    const n = await page.evaluate(() => {
+        const m = Module.ccall('mixednet_create', 'number', ['number'], [1]);
+        const f = Module.ccall('mixednet_min_frames', 'number', ['number'], [m]);
+        Module.ccall('mixednet_destroy', null, ['number'], [m]);
+        return f;
+    });
     expect(n).toBe(157);
+});
+
+test('mixednet_min_frames returns 204 for pooled=0', async ({ page }) => {
+    const n = await page.evaluate(() => {
+        const m = Module.ccall('mixednet_create', 'number', ['number'], [0]);
+        const f = Module.ccall('mixednet_min_frames', 'number', ['number'], [m]);
+        Module.ccall('mixednet_destroy', null, ['number'], [m]);
+        return f;
+    });
+    expect(n).toBe(204);
 });
 
 test('mixednet_create returns a non-null pointer', async ({ page }) => {
     const ptr = await page.evaluate(() =>
-        Module.ccall('mixednet_create', 'number', [], []));
+        Module.ccall('mixednet_create', 'number', ['number'], [1]));
     expect(ptr).not.toBe(0);
     await page.evaluate(p =>
         Module.ccall('mixednet_destroy', null, ['number'], [p]), ptr);
 });
 
-test('mixednet_num_params returns 24801', async ({ page }) => {
+test('mixednet_num_params returns 24801 for pooled=1', async ({ page }) => {
     const n = await page.evaluate(() => {
-        const m = Module.ccall('mixednet_create', 'number', [], []);
+        const m = Module.ccall('mixednet_create', 'number', ['number'], [1]);
         const params = Module.ccall('mixednet_num_params', 'number', ['number'], [m]);
         Module.ccall('mixednet_destroy', null, ['number'], [m]);
         return params;
@@ -39,12 +53,22 @@ test('mixednet_num_params returns 24801', async ({ page }) => {
     expect(n).toBe(24801);
 });
 
+test('mixednet_num_params returns 25825 for pooled=0', async ({ page }) => {
+    const n = await page.evaluate(() => {
+        const m = Module.ccall('mixednet_create', 'number', ['number'], [0]);
+        const params = Module.ccall('mixednet_num_params', 'number', ['number'], [m]);
+        Module.ccall('mixednet_destroy', null, ['number'], [m]);
+        return params;
+    });
+    expect(n).toBe(25825);
+});
+
 // ── Forward pass ──────────────────────────────────────────────────────────────
 
 test('mixednet_forward returns probability in [0, 1]', async ({ page }) => {
     const prob = await page.evaluate(() => {
-        const m = Module.ccall('mixednet_create', 'number', [], []);
-        const T = Module.ccall('mixednet_min_frames', 'number', [], []) + 5;
+        const m = Module.ccall('mixednet_create', 'number', ['number'], [1]);
+        const T = Module.ccall('mixednet_min_frames', 'number', ['number'], [m]) + 5;
 
         const specF32  = new Float32Array(T * 40).fill(0.1);
         const specBytes = new Uint8Array(specF32.buffer);
@@ -62,12 +86,12 @@ test('mixednet_forward returns probability in [0, 1]', async ({ page }) => {
 
 test('mixednet_forward output differs for different random seeds', async ({ page }) => {
     const { p1, p2 } = await page.evaluate(() => {
-        const m1 = Module.ccall('mixednet_create', 'number', [], []);
-        const m2 = Module.ccall('mixednet_create', 'number', [], []);
+        const m1 = Module.ccall('mixednet_create', 'number', ['number'], [1]);
+        const m2 = Module.ccall('mixednet_create', 'number', ['number'], [1]);
         Module.ccall('mixednet_init_random', null, ['number', 'number'], [m1, 1]);
         Module.ccall('mixednet_init_random', null, ['number', 'number'], [m2, 2]);
 
-        const T = Module.ccall('mixednet_min_frames', 'number', [], []) + 5;
+        const T = Module.ccall('mixednet_min_frames', 'number', ['number'], [m1]) + 5;
         const specF32  = new Float32Array(T * 40).fill(0.2);
         const specBytes = new Uint8Array(specF32.buffer);
 
@@ -86,9 +110,9 @@ test('mixednet_forward output differs for different random seeds', async ({ page
 
 test('train_step returns a finite positive loss', async ({ page }) => {
     const loss = await page.evaluate(() => {
-        const m   = Module.ccall('mixednet_create', 'number', [], []);
+        const m   = Module.ccall('mixednet_create', 'number', ['number'], [1]);
         const opt = Module.ccall('adam_create', 'number', ['number', 'number'], [m, 1e-3]);
-        const T   = Module.ccall('mixednet_min_frames', 'number', [], []) + 5;
+        const T   = Module.ccall('mixednet_min_frames', 'number', ['number'], [m]) + 5;
 
         const specF32  = new Float32Array(T * 40).fill(0.1);
         const specBytes = new Uint8Array(specF32.buffer);
@@ -107,9 +131,9 @@ test('train_step returns a finite positive loss', async ({ page }) => {
 
 test('train_step loss decreases over 20 steps on a fixed spectrogram', async ({ page }) => {
     const losses = await page.evaluate(() => {
-        const m   = Module.ccall('mixednet_create', 'number', [], []);
+        const m   = Module.ccall('mixednet_create', 'number', ['number'], [1]);
         const opt = Module.ccall('adam_create', 'number', ['number', 'number'], [m, 1e-3]);
-        const T   = Module.ccall('mixednet_min_frames', 'number', [], []) + 10;
+        const T   = Module.ccall('mixednet_min_frames', 'number', ['number'], [m]) + 10;
         const F   = 40;
 
         // Deterministic spectrogram via LCG (same seed = same data each step).
@@ -143,12 +167,12 @@ test('train_step loss decreases over 20 steps on a fixed spectrogram', async ({ 
 test('get_params / set_params copies weights between two networks', async ({ page }) => {
     // After copying m1's weights into m2, both should produce identical forward output.
     const { p1, p2_before, p2_after, match } = await page.evaluate(() => {
-        const m1 = Module.ccall('mixednet_create', 'number', [], []);
-        const m2 = Module.ccall('mixednet_create', 'number', [], []);
+        const m1 = Module.ccall('mixednet_create', 'number', ['number'], [1]);
+        const m2 = Module.ccall('mixednet_create', 'number', ['number'], [1]);
         Module.ccall('mixednet_init_random', null, ['number', 'number'], [m1, 42]);
         Module.ccall('mixednet_init_random', null, ['number', 'number'], [m2, 99]);
 
-        const T = Module.ccall('mixednet_min_frames', 'number', [], []) + 5;
+        const T = Module.ccall('mixednet_min_frames', 'number', ['number'], [m1]) + 5;
         const specF32  = new Float32Array(T * 40).fill(0.15);
         const specBytes = new Uint8Array(specF32.buffer);
 

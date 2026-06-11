@@ -27,9 +27,10 @@ function _resampleTo16k(samples, srcRate) {
 }
 
 // Process Float32Array audio through the WASM MicroFrontend.
-// Resamples to 16 kHz internally. Pads to minFrames (157) if the clip is short.
+// Resamples to 16 kHz internally. Pads to minFrames if the clip is short.
+// minFrames: use trainState.minFrames (157 for pooled, 204 for full-window).
 // Returns { spectrogram: Float32Array (T×40), T } or null if WASM not ready.
-function audioToFloat32Spec(samples, sampleRate = 16000) {
+function audioToFloat32Spec(samples, sampleRate = 16000, minFrames = 157) {
     if (!window.webTrainerReady || !window.Module) return null;
     if (!Module.HEAPU8 || !Module.HEAPF32) {
         console.warn('trainer: HEAPU8/HEAPF32 not exported — rebuild WASM');
@@ -43,7 +44,7 @@ function audioToFloat32Spec(samples, sampleRate = 16000) {
     }
 
     const fe        = Module.ccall('frontend_create', 'number', [], []);
-    const maxFrames = Math.ceil(int16.length / 160) + 10;
+    const maxFrames = Math.max(Math.ceil(int16.length / 160) + 10, minFrames + 1);
     const featPtr   = Module._malloc(maxFrames * 40);
     const pcmBytes  = new Uint8Array(int16.buffer);
 
@@ -53,9 +54,7 @@ function audioToFloat32Spec(samples, sampleRate = 16000) {
 
     Module.ccall('frontend_destroy', null, ['number'], [fe]);
 
-    const minFrames = Module.ccall('mixednet_min_frames', 'number', [], []);
-    const actualT   = Math.max(T, minFrames);
-
+    const actualT     = Math.max(T, minFrames);
     const spectrogram = new Float32Array(actualT * 40);
     for (let i = 0; i < T * 40; i++) spectrogram[i] = Module.HEAPU8[featPtr + i] * _FEAT_SCALE;
     // Frames beyond T are zero-padded (Float32Array initialises to 0).
@@ -65,11 +64,15 @@ function audioToFloat32Spec(samples, sampleRate = 16000) {
 }
 
 // Allocate a new MixedNet and Adam on the WASM heap.
-// Returns { net, adam } — both are numeric WASM pointers.
-function trainCreate(lr = 1e-3) {
-    const net  = Module.ccall('mixednet_create', 'number', [], []);
-    const adam = Module.ccall('adam_create', 'number', ['number', 'number'], [net, lr]);
-    return { net, adam };
+// pooled: 1 = global-avg-pool + Dense(64→1) [24801 params, minFrames=157]
+//         0 = flatten(17×64) + Dense(1088→1) [25825 params, minFrames=204]
+// Returns { net, adam, minFrames, numParams }.
+function trainCreate(lr = 1e-3, pooled = 1) {
+    const net       = Module.ccall('mixednet_create', 'number', ['number'], [pooled]);
+    const adam      = Module.ccall('adam_create',    'number', ['number', 'number'], [net, lr]);
+    const minFrames = Module.ccall('mixednet_min_frames', 'number', ['number'], [net]);
+    const numParams = Module.ccall('mixednet_num_params', 'number', ['number'], [net]);
+    return { net, adam, minFrames, numParams };
 }
 
 // Free WASM objects created by trainCreate.

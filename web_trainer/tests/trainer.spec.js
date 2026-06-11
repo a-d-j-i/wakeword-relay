@@ -36,17 +36,29 @@ test('audioToFloat32Spec produces T >= 157 for 2 s of audio at 16 kHz', async ({
     expect(result.spectrogram.length).toBe(result.T * 40);
 });
 
-test('audioToFloat32Spec pads short audio to minFrames (157)', async ({ page }) => {
+test('audioToFloat32Spec pads short audio to minFrames (157 default)', async ({ page }) => {
     // 0.5 s = 8000 samples → ~50 frames → should be padded to 157
     const result = await page.evaluate(() => {
         const samples = new Float32Array(8000);
         for (let i = 0; i < samples.length; i++)
             samples[i] = 0.2 * Math.sin(2 * Math.PI * 440 * i / 16000);
-        return audioToFloat32Spec(samples, 16000);
+        return audioToFloat32Spec(samples, 16000, 157);
     });
     expect(result).not.toBeNull();
     expect(result.T).toBe(157);
     expect(result.spectrogram.length).toBe(157 * 40);
+});
+
+test('audioToFloat32Spec pads short audio to minFrames 204 when requested', async ({ page }) => {
+    const result = await page.evaluate(() => {
+        const samples = new Float32Array(8000);
+        for (let i = 0; i < samples.length; i++)
+            samples[i] = 0.2 * Math.sin(2 * Math.PI * 440 * i / 16000);
+        return audioToFloat32Spec(samples, 16000, 204);
+    });
+    expect(result).not.toBeNull();
+    expect(result.T).toBe(204);
+    expect(result.spectrogram.length).toBe(204 * 40);
 });
 
 test('audioToFloat32Spec resamples non-16k input', async ({ page }) => {
@@ -80,7 +92,7 @@ test('audioToFloat32Spec values are in expected float range [0, ~10]', async ({ 
 
 test('trainCreate returns non-zero pointers', async ({ page }) => {
     const result = await page.evaluate(() => {
-        const { net, adam } = trainCreate(1e-3);
+        const { net, adam } = trainCreate(1e-3, 1);
         const ok = net !== 0 && adam !== 0;
         trainDestroy(net, adam);
         return ok;
@@ -91,7 +103,7 @@ test('trainCreate returns non-zero pointers', async ({ page }) => {
 test('trainDestroy does not crash on repeated calls', async ({ page }) => {
     await expect(page.evaluate(() => {
         for (let i = 0; i < 3; i++) {
-            const { net, adam } = trainCreate(1e-3);
+            const { net, adam } = trainCreate(1e-3, 1);
             trainDestroy(net, adam);
         }
         return 'ok';
@@ -102,7 +114,7 @@ test('trainDestroy does not crash on repeated calls', async ({ page }) => {
 
 test('trainGetParams returns 24801 float32 values', async ({ page }) => {
     const n = await page.evaluate(() => {
-        const { net, adam } = trainCreate(1e-3);
+        const { net, adam } = trainCreate(1e-3, 1);
         const p = trainGetParams(net);
         trainDestroy(net, adam);
         return p.length;
@@ -114,7 +126,7 @@ test('trainGetParams returns 24801 float32 values', async ({ page }) => {
 
 test('trainStep returns a finite positive loss', async ({ page }) => {
     const loss = await page.evaluate(() => {
-        const { net, adam } = trainCreate(1e-3);
+        const { net, adam } = trainCreate(1e-3, 1);
         const T = 157 + 5;
         const spec = new Float32Array(T * 40).fill(0.5);
         const loss = trainStep(net, adam, spec, T, 1.0);
@@ -127,7 +139,7 @@ test('trainStep returns a finite positive loss', async ({ page }) => {
 
 test('trainStep loss decreases over 10 steps on a fixed positive spectrogram', async ({ page }) => {
     const losses = await page.evaluate(() => {
-        const { net, adam } = trainCreate(1e-3);
+        const { net, adam } = trainCreate(1e-3, 1);
         const T = 157 + 10;
         // Deterministic spectrogram
         const spec = new Float32Array(T * 40);
@@ -151,7 +163,7 @@ test('trainStep with audioToFloat32Spec output: loss is finite', async ({ page }
             samples[i] = 0.3 * Math.sin(2 * Math.PI * 440 * i / 16000);
         const feat = audioToFloat32Spec(samples, 16000);
         if (!feat) return null;
-        const { net, adam } = trainCreate(1e-3);
+        const { net, adam } = trainCreate(1e-3, 1);
         const loss = trainStep(net, adam, feat.spectrogram, feat.T, 1.0);
         trainDestroy(net, adam);
         return loss;

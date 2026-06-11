@@ -88,8 +88,11 @@ int frontend_num_features() { return kNumFeatures; }
 
 // ── MixedNet ─────────────────────────────────────────────────────────────
 
-MixedNet* mixednet_create() {
+// pooled: 1 = global-avg-pool + Dense(64→1) [default, 24801 params]
+//         0 = flatten(17×64) + Dense(1088→1)  [train.py parity, 25825 params]
+MixedNet* mixednet_create(int pooled) {
     auto* m = new MixedNet();
+    m->pooled = (pooled != 0);
     m->init_random(42);
     return m;
 }
@@ -119,7 +122,7 @@ float mixednet_forward(MixedNet* m, const float* spectrogram, int T) {
     return m->forward(spectrogram, T);
 }
 
-int mixednet_min_frames() { return MixedNet::min_input_frames(); }
+int mixednet_min_frames(MixedNet* m) { return m->min_input_frames(); }
 
 // ── Adam ──────────────────────────────────────────────────────────────────
 
@@ -160,11 +163,11 @@ float train_step(MixedNet* m, Adam* a,
 #ifndef __EMSCRIPTEN__
 // Native smoke-test: train a few steps and verify loss decreases
 int main() {
-    int T = MixedNet::min_input_frames() + 10;
-    int F = MixedNet::kInFeatures;
-
     MixedNet net;
+    net.pooled = true;
     net.init_random(42);
+    int T = net.min_input_frames() + 10;
+    int F = MixedNet::kInFeatures;
     Adam opt;
     opt.init(net.num_params(), 1e-3f);
 

@@ -5,7 +5,8 @@
 
 // MixedNet matching microWakeWord production config:
 //   first_conv(32, k=5, stride=3), 4 MixConv blocks (64 filters each),
-//   global-avg-pool, Dense(1)+sigmoid.
+//   then either global-avg-pool + Dense(64→1)  [pooled=true]
+//   or  flatten(17×64) + Dense(1088→1)         [pooled=false, matches train.py default]
 //
 // Block kernel configs (per-group depthwise kernels):
 //   [0] = {5},  [1] = {7,11},  [2] = {9,15},  [3] = {23}
@@ -16,6 +17,14 @@ struct MixedNet {
     static constexpr int kFirstStride  = 3;
     static constexpr int kFilters      = 64;
     static constexpr int kNumBlocks    = 4;
+
+    // pooled=false constants: 204 input frames → exactly 17 output frames after all blocks
+    static constexpr int kWindowFrames = 17;
+    static constexpr int kTrainFrames  = 204;
+    static constexpr int kDenseInFull  = kWindowFrames * kFilters;  // 1088
+
+    // Architecture mode — set at construction, drives dense_w size and forward/backward
+    bool pooled = true;
 
     // First conv kernel: [kFirstKernel, kInFeatures, kFirstFilters]
     std::vector<float> first_conv;
@@ -30,7 +39,7 @@ struct MixedNet {
     };
     Block blocks[kNumBlocks];
 
-    // Dense: w[kFilters], b scalar
+    // Dense: w[kFilters] (pooled) or w[kDenseInFull] (full window); b scalar
     std::vector<float> dense_w;
     float dense_b = 0.0f;
 
@@ -41,8 +50,9 @@ struct MixedNet {
     // T must be >= min_input_frames() for the model to produce output.
     float forward(const float* spectrogram, int T) const;
 
-    // Minimum number of input frames needed to produce at least one output frame
-    static int min_input_frames();
+    // Minimum number of input frames needed to produce at least one output frame.
+    // pooled=true → 157; pooled=false → 204 (kTrainFrames).
+    int min_input_frames() const;
 
     // Flat weight buffer (for serialization / JS transfer)
     int num_params() const;
@@ -73,7 +83,7 @@ struct ForwardCache {
     int T = 0, T1 = 0;
     std::vector<float> fc_relu_out;      // [T1 * MixedNet::kFirstFilters]
     BlockCache blk[MixedNet::kNumBlocks];
-    std::vector<float> pooled;           // [MixedNet::kFilters]
+    std::vector<float> pre_dense;        // [kFilters] (pooled) or [kWindowFrames*kFilters] (full)
     float logit = 0.f, prob = 0.f;
 };
 

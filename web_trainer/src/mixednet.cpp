@@ -55,20 +55,21 @@ void MixedNet::init_random(uint32_t seed) {
         blk.bn_var.assign(kFilters, 1.0f);
     }
 
-    float d_std = sqrtf(2.0f / kFilters);
-    dense_w.resize(kFilters);
+    int dense_in = pooled ? kFilters : kDenseInFull;
+    float d_std = sqrtf(2.0f / dense_in);
+    dense_w.resize(dense_in);
     for (float& v : dense_w) v = lcg_randn(seed) * d_std;
     dense_b = 0.0f;
 }
 
-int MixedNet::min_input_frames() {
+int MixedNet::min_input_frames() const {
+    if (!pooled) return kTrainFrames;  // 204: gives exactly kWindowFrames output frames
     // Work backwards: each block needs at least max_kernel frames from previous
-    int min_post_blk = 1;  // at least 1 output frame from last block
+    int min_post_blk = 1;
     for (int b = kNumBlocks - 1; b >= 0; --b) {
         int max_k = *std::max_element(kBlkKernels[b].begin(), kBlkKernels[b].end());
         min_post_blk += max_k - 1;
     }
-    // Before first conv (stride): T >= min_post_blk * kFirstStride + kFirstKernel - 1
     return min_post_blk * kFirstStride + (kFirstKernel - 1);
 }
 
@@ -134,13 +135,18 @@ float MixedNet::forward(const float* spectrogram, int T) const {
         C_cur = kFilters;
     }
 
-    // 3. Global average pool: [T_cur, 64] → [64]
-    std::vector<float> pooled(kFilters);
-    avg_pool_global(x.data(), T_cur, kFilters, pooled.data());
-
-    // 4. Dense(64→1) + sigmoid
+    // 3. Pool → Dense + sigmoid
     float logit = dense_b;
-    for (int i = 0; i < kFilters; ++i) logit += pooled[i] * dense_w[i];
+    if (pooled) {
+        // Global average pool: [T_cur, 64] → [64], then Dense(64→1)
+        std::vector<float> avg(kFilters);
+        avg_pool_global(x.data(), T_cur, kFilters, avg.data());
+        for (int i = 0; i < kFilters; ++i) logit += avg[i] * dense_w[i];
+    } else {
+        // Flatten [kWindowFrames, 64] → [1088], then Dense(1088→1)
+        assert(T_cur == kWindowFrames);
+        for (int i = 0; i < kDenseInFull; ++i) logit += x[i] * dense_w[i];
+    }
     return sigmoid_f(logit);
 }
 
@@ -219,13 +225,17 @@ float MixedNet::forward_cached(const float* spectrogram, int T, ForwardCache& ca
         C_cur = kFilters;
     }
 
-    // 3. Global average pool
-    cache.pooled.resize(kFilters);
-    avg_pool_global(x_ptr, T_cur, kFilters, cache.pooled.data());
-
-    // 4. Dense + sigmoid
+    // 3. Pool → Dense + sigmoid
     cache.logit = dense_b;
-    for (int i = 0; i < kFilters; ++i) cache.logit += cache.pooled[i] * dense_w[i];
+    if (pooled) {
+        cache.pre_dense.resize(kFilters);
+        avg_pool_global(x_ptr, T_cur, kFilters, cache.pre_dense.data());
+        for (int i = 0; i < kFilters; ++i) cache.logit += cache.pre_dense[i] * dense_w[i];
+    } else {
+        assert(T_cur == kWindowFrames);
+        cache.pre_dense.assign(x_ptr, x_ptr + kDenseInFull);
+        for (int i = 0; i < kDenseInFull; ++i) cache.logit += cache.pre_dense[i] * dense_w[i];
+    }
     cache.prob = sigmoid_f(cache.logit);
     return cache.prob;
 }
@@ -264,27 +274,29 @@ float MixedNet::backward(const float* spectrogram, int T, float label,
         gb[b].bn_mean  = g_ptr; g_ptr += kFilters;
         gb[b].bn_var   = g_ptr; g_ptr += kFilters;
     }
-    float* g_dense_w = g_ptr; g_ptr += kFilters;
+    int dense_in = pooled ? kFilters : kDenseInFull;
+    float* g_dense_w = g_ptr; g_ptr += dense_in;
     float& g_dense_b = *g_ptr;
 
     // --- 1. Loss + sigmoid: d_logit = prob - label ---
-    float loss   = bce_loss(cache.prob, label);
+    float loss    = bce_loss(cache.prob, label);
     float d_logit = cache.prob - label;
 
     // --- 2. Dense grad ---
-    for (int i = 0; i < kFilters; ++i) {
-        g_dense_w[i] += d_logit * cache.pooled[i];
-    }
+    for (int i = 0; i < dense_in; ++i)
+        g_dense_w[i] += d_logit * cache.pre_dense[i];
     g_dense_b += d_logit;
 
-    // d_pooled[i] = d_logit * dense_w[i]
-    std::vector<float> d_pooled(kFilters);
-    for (int i = 0; i < kFilters; ++i) d_pooled[i] = d_logit * dense_w[i];
-
-    // --- 3. Avg pool backward → d_x for last block ---
+    // --- 3. Pool backward → d_x for last block ---
     int T_last = cache.blk[kNumBlocks - 1].T_out;
     std::vector<float> d_x(T_last * kFilters, 0.0f);
-    avg_pool_global_grad(d_pooled.data(), T_last, kFilters, d_x.data());
+    if (pooled) {
+        std::vector<float> d_avg(kFilters);
+        for (int i = 0; i < kFilters; ++i) d_avg[i] = d_logit * dense_w[i];
+        avg_pool_global_grad(d_avg.data(), T_last, kFilters, d_x.data());
+    } else {
+        for (int i = 0; i < kDenseInFull; ++i) d_x[i] = d_logit * dense_w[i];
+    }
 
     // --- 4. Blocks backward (last to first) ---
     for (int b = kNumBlocks - 1; b >= 0; --b) {
@@ -395,7 +407,7 @@ int MixedNet::num_params() const {
         n += (int)blk.pw.size();
         n += 4 * kFilters;  // gamma, beta, mean, var
     }
-    n += kFilters + 1;  // dense_w + dense_b
+    n += (int)dense_w.size() + 1;  // dense_w + dense_b
     return n;
 }
 
