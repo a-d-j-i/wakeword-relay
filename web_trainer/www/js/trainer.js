@@ -67,7 +67,7 @@ function audioToFloat32Spec(samples, sampleRate = 16000, minFrames = 157) {
 // pooled: 1 = global-avg-pool + Dense(64→1) [24801 params, minFrames=157]
 //         0 = flatten(17×64) + Dense(1088→1) [25825 params, minFrames=204]
 // Returns { net, adam, minFrames, numParams }.
-function trainCreate(lr = 1e-3, pooled = 1) {
+function trainCreate(lr = 1e-3, pooled = 0) {
     const net       = Module.ccall('mixednet_create', 'number', ['number'], [pooled]);
     const adam      = Module.ccall('adam_create',    'number', ['number', 'number'], [net, lr]);
     const minFrames = Module.ccall('mixednet_min_frames', 'number', ['number'], [net]);
