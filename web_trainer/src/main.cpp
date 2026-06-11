@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include "mixednet.h"
+#include "tflite_export.h"
 
 // MicroFrontend configuration matching microWakeWord / ESP32-S3 settings.
 // These must match exactly what the model was trained with.
@@ -156,6 +157,25 @@ float train_step(MixedNet* m, Adam* a,
     m->set_params(params.data());
 
     return loss;
+}
+
+// ── TFLite export ─────────────────────────────────────────────────────────
+
+// Build streaming INT8 TFLite from trained weights + a template TFLite.
+// template_ptr: pointer to template TFLite bytes in WASM heap
+// template_size: byte count
+// calib_n: calibration samples (500 recommended)
+// Returns pointer to newly allocated buffer; caller must free() it.
+// out_size is written with the byte count.
+uint8_t* mixednet_export_tflite(MixedNet* m,
+                                const uint8_t* template_ptr, int template_size,
+                                int calib_n,
+                                int* out_size_ptr) {
+    size_t sz = 0;
+    uint8_t* buf = mixednet_build_tflite(m, template_ptr, (size_t)template_size,
+                                         calib_n, &sz);
+    if (out_size_ptr) *out_size_ptr = (int)sz;
+    return buf;
 }
 
 } // extern "C"

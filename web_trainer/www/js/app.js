@@ -525,6 +525,7 @@ let _abortFlag      = false;
 const trainStartBtn   = document.getElementById('train-start-btn');
 const trainStopBtn    = document.getElementById('train-stop-btn');
 const trainExportBtn  = document.getElementById('train-export-btn');
+const trainTfliteBtn  = document.getElementById('train-tflite-btn');
 const trainStatus     = document.getElementById('train-status');
 const trainProgress   = document.getElementById('train-progress');
 const trainLossWrap   = document.getElementById('train-loss-wrap');
@@ -679,6 +680,7 @@ trainStartBtn.addEventListener('click', async () => {
     trainPrepareBtn.disabled = true;
     trainStopBtn.disabled   = false;
     trainExportBtn.disabled = false;
+    trainTfliteBtn.disabled = false;
     trainProgress.style.display = '';
     trainProgress.value = 0;
     trainProgress.max   = numSteps;
@@ -764,4 +766,40 @@ trainExportBtn.addEventListener('click', () => {
     const a    = document.createElement('a');
     a.href = url; a.download = 'wakeword_weights.bin'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+});
+
+// ── Export TFLite ─────────────────────────────────────────────────────────────
+
+trainTfliteBtn.addEventListener('click', async () => {
+    if (!_trainNet) return;
+
+    trainTfliteBtn.disabled = true;
+    trainStatus.textContent = 'Exporting TFLite… (calibrating INT8 quantization)';
+    trainStatus.className = 'status';
+
+    try {
+        const resp = await fetch('tflite_template.bin');
+        if (!resp.ok) throw new Error(`Template fetch failed: ${resp.status}`);
+        const tmplBytes = new Uint8Array(await resp.arrayBuffer());
+
+        // Run in next microtask so the status text renders first
+        await new Promise(r => setTimeout(r, 0));
+
+        const tflite = trainExportTFLite(_trainNet, tmplBytes, 500);
+        if (!tflite) throw new Error('Export returned null (check console)');
+
+        const blob = new Blob([tflite], { type: 'application/octet-stream' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = 'wakeword.tflite'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+
+        trainStatus.textContent = `TFLite exported (${(tflite.byteLength / 1024).toFixed(1)} KB)`;
+        trainStatus.className = 'status ok';
+    } catch (e) {
+        trainStatus.textContent = 'TFLite export failed: ' + e.message;
+        trainStatus.className = 'status err';
+    } finally {
+        trainTfliteBtn.disabled = false;
+    }
 });

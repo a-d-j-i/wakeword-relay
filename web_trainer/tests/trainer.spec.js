@@ -172,3 +172,36 @@ test('trainStep with audioToFloat32Spec output: loss is finite', async ({ page }
     expect(isFinite(loss)).toBe(true);
     expect(loss).toBeGreaterThan(0);
 });
+
+// ── trainExportTFLite ─────────────────────────────────────────────────────────
+
+test('trainExportTFLite returns a valid TFLite buffer with TFL3 magic', async ({ page }) => {
+    // 2 min timeout because INT8 calibration runs 100 forward passes
+    test.setTimeout(120_000);
+
+    const result = await page.evaluate(async () => {
+        const resp = await fetch('/tflite_template.bin');
+        if (!resp.ok) return { error: 'template fetch failed: ' + resp.status };
+        const tmplBytes = new Uint8Array(await resp.arrayBuffer());
+
+        const { net, adam } = trainCreate(1e-3, 0 /* pooled=0 */);
+        const tflite = trainExportTFLite(net, tmplBytes, 50);  // 50 calib samples
+        trainDestroy(net, adam);
+
+        if (!tflite) return { error: 'export returned null' };
+
+        // TFLite magic is at offset 4: "TFL3"
+        const magic = String.fromCharCode(tflite[4], tflite[5], tflite[6], tflite[7]);
+        return {
+            size: tflite.length,
+            magic,
+            // First 4 bytes are the FlatBuffer offset to root table
+            rootOffset: (tflite[3] << 24 | tflite[2] << 16 | tflite[1] << 8 | tflite[0]) >>> 0,
+        };
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.magic).toBe('TFL3');
+    expect(result.size).toBeGreaterThan(50_000);  // template is 62 KB, output similar
+    expect(result.size).toBeLessThan(200_000);
+});

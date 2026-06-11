@@ -106,8 +106,40 @@ function trainGetParams(net) {
     return out;
 }
 
+// Export trained MixedNet weights as a streaming INT8 TFLite file.
+// templateBytes: Uint8Array of a pooled=0 TFLite template (topology only, weights replaced)
+// calibN: number of synthetic calibration samples (500 recommended)
+// Returns Uint8Array of the output TFLite, or null on failure.
+function trainExportTFLite(net, templateBytes, calibN = 500) {
+    if (!net || !templateBytes) return null;
+
+    // Copy template into WASM heap
+    const tmplPtr = Module._malloc(templateBytes.byteLength);
+    Module.HEAPU8.set(templateBytes, tmplPtr);
+
+    // Allocate output size slot (int32)
+    const outSzPtr = Module._malloc(4);
+    Module.HEAP32[outSzPtr >> 2] = 0;
+
+    const outPtr = Module.ccall('mixednet_export_tflite', 'number',
+        ['number', 'number', 'number', 'number', 'number'],
+        [net, tmplPtr, templateBytes.byteLength, calibN, outSzPtr]);
+
+    Module._free(tmplPtr);
+
+    if (!outPtr) { Module._free(outSzPtr); return null; }
+
+    const outSz = Module.HEAP32[outSzPtr >> 2];
+    Module._free(outSzPtr);
+
+    const result = Module.HEAPU8.slice(outPtr, outPtr + outSz);
+    Module._free(outPtr);
+    return result;
+}
+
 window.audioToFloat32Spec = audioToFloat32Spec;
 window.trainCreate        = trainCreate;
 window.trainDestroy       = trainDestroy;
 window.trainStep          = trainStep;
 window.trainGetParams     = trainGetParams;
+window.trainExportTFLite  = trainExportTFLite;
