@@ -83,6 +83,12 @@
   .done { color: #16a34a; }
   .next { color: #2563eb; font-weight: 600; }
 
+  /* Spinner */
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #ddd;
+             border-top-color: #2563eb; border-radius: 50%;
+             animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 0.4rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* Negatives / noise bundle */
   #neg-progress, #noise-progress { width: 100%; margin-top: 0.5rem; }
 
@@ -124,6 +130,7 @@
       <canvas id="fe-canvas" class="spectrogram"></canvas>
       <p class="spec-label">40 log-mel filterbanks · 10 ms/frame · 16 kHz · PCAN gain</p>
     </div>
+    <audio id="fe-audio" controls style="width:100%;margin-top:0.5rem;display:none"></audio>
     <p id="fe-stats" class="status" style="margin-top:0.4rem"></p>
   </div>
 </section>
@@ -150,7 +157,7 @@
       </div>
       <button id="btn-load" disabled style="align-self:flex-end">Load</button>
     </div>
-    <p id="load-status" class="status">Waiting for phonemizer…</p>
+    <p id="load-status" class="status"><span id="load-spinner" class="spinner" style="display:none"></span><span id="load-status-text">Waiting for phonemizer…</span></p>
   </div>
 
   <div class="card">
@@ -175,7 +182,7 @@
     </div>
     <p id="ipa-out"></p>
     <progress id="gen-progress" value="0" max="1" style="display:none"></progress>
-    <p id="gen-status" class="status"></p>
+    <p id="gen-status" class="status"><span id="gen-spinner" class="spinner" style="display:none"></span><span id="gen-status-text"></span></p>
   </div>
 
   <div class="card">
@@ -346,21 +353,22 @@
       <p>Run once from the repo root:<br>
         <code>python3 web_trainer/tools/build_negatives_bundle.py \
           --input_dir /path/to/negative_datasets \
-          --output negatives.bin</code><br>
+          --output negatives.mwwn</code><br>
         Then load the file below or host it and paste the URL.
       </p>
     </details>
 
     <div class="row" style="margin-top:0.8rem">
       <div class="col">
-        <label>Load bundle from disk (negatives.bin)</label>
-        <input type="file" id="neg-file" accept=".bin">
+        <label>Load bundle from disk (.mwwn)</label>
+        <input type="file" id="neg-file" accept=".mwwn,.bin">
       </div>
     </div>
 
     <div class="row" style="margin-top:0.5rem; gap: 0.4rem">
-      <input type="text" id="neg-url" placeholder="https://…/negatives.bin" style="width:22rem">
+      <input type="text" id="neg-url" placeholder="https://…/negatives.mwwn" style="width:22rem">
       <button id="neg-dl-btn" class="secondary">Download</button>
+      <a id="neg-bundled-link" href="#" style="font-size:0.8rem;align-self:center">use bundled</a>
     </div>
 
     <progress id="neg-progress" value="0" max="1" style="display:none"></progress>
@@ -380,7 +388,7 @@
       <p>Run once from the repo root:<br>
         <code>python3 web_trainer/tools/build_noise_bundle.py \
           --input_dirs /path/to/audioset_16k /path/to/fma_16k \
-          --output noise.bin</code><br>
+          --output noise.mwwb</code><br>
         Requires the <code>audioset_16k/</code> and <code>fma_16k/</code>
         directories from <code>train.py --downloads_dir</code>.
         Output is ~100 MB; stored in OPFS (survives reloads, separate from IndexedDB).
@@ -389,14 +397,15 @@
 
     <div class="row" style="margin-top:0.8rem">
       <div class="col">
-        <label>Load bundle from disk (noise.bin)</label>
-        <input type="file" id="noise-file" accept=".bin">
+        <label>Load bundle from disk (.mwwb)</label>
+        <input type="file" id="noise-file" accept=".mwwb,.bin">
       </div>
     </div>
 
     <div class="row" style="margin-top:0.5rem; gap: 0.4rem">
-      <input type="text" id="noise-url" placeholder="https://…/noise.bin" style="width:22rem">
+      <input type="text" id="noise-url" placeholder="https://…/noise.mwwb" style="width:22rem">
       <button id="noise-dl-btn" class="secondary">Download</button>
+      <a id="noise-bundled-link" href="#" style="font-size:0.8rem;align-self:center">use bundled</a>
     </div>
 
     <progress id="noise-progress" value="0" max="1" style="display:none"></progress>
@@ -432,7 +441,6 @@
 <!-- ── Scripts ────────────────────────────────────────────────────────────── -->
 <script src="piper_phonemize.js"></script>
 <script src="web_trainer.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <script src="js/piper.js"></script>
 <script src="js/augment.js"></script>
 <script src="js/spectrogram.js"></script>

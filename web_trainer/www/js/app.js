@@ -13,16 +13,14 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 // ── Module initialisation ─────────────────────────────────────────────────────
 
-ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
-
 // Phonemizer (espeak-ng WASM) — used by TTS tab.
 initPhonemizer()
     .then(() => {
-        document.getElementById('load-status').textContent = 'Phonemizer ready. Select model files above.';
+        document.getElementById('load-status-text').textContent = 'Phonemizer ready. Select model files above.';
         document.getElementById('load-status').className = 'status ok';
     })
     .catch(e => {
-        document.getElementById('load-status').textContent = 'Phonemizer init failed: ' + e.message;
+        document.getElementById('load-status-text').textContent = 'Phonemizer init failed: ' + e.message;
         document.getElementById('load-status').className = 'status err';
     });
 
@@ -34,7 +32,7 @@ const prereqNoise = document.getElementById('prereq-noise');
 const trainPrepareBtn = document.getElementById('train-prepare-btn');
 
 function updatePrereqs() {
-    const hasTts   = ortSession !== null;
+    const hasTts   = modelBlobUrl !== null;
     const hasNeg   = negCats   !== null;
     const hasNoise = noiseParsed !== null;
 
@@ -77,6 +75,7 @@ function showSpectrogram(canvas, wrap, samples, sampleRate) {
 const feFileInput   = document.getElementById('fe-file');
 const feCanvas      = document.getElementById('fe-canvas');
 const feCanvasWrap  = document.getElementById('fe-canvas-wrap');
+const feAudio       = document.getElementById('fe-audio');
 const feStats       = document.getElementById('fe-stats');
 
 feFileInput.addEventListener('change', async () => {
@@ -85,6 +84,8 @@ feFileInput.addEventListener('change', async () => {
     feStats.textContent = 'Processing…';
     try {
         const buf  = await file.arrayBuffer();
+        feAudio.src = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+        feAudio.style.display = '';
         const wav  = loadWav(buf);
         showSpectrogram(feCanvas, feCanvasWrap, wav.samples, wav.sampleRate);
         const result = audioToSpectrogram(wav.samples, wav.sampleRate);
@@ -99,13 +100,20 @@ feFileInput.addEventListener('change', async () => {
 
 // ── TTS tab ───────────────────────────────────────────────────────────────────
 
-let ortSession  = null;
-let voiceConfig = null;
+let modelBlobUrl = null;   // Blob URL of the loaded .onnx; passed to synthesis workers
+let voiceConfig  = null;
 
 const fileModel   = document.getElementById('file-model');
 const fileConfig  = document.getElementById('file-config');
-const btnLoad     = document.getElementById('btn-load');
-const loadStatus  = document.getElementById('load-status');
+const btnLoad      = document.getElementById('btn-load');
+const loadStatus   = document.getElementById('load-status');
+const loadSpinner  = document.getElementById('load-spinner');
+const loadStatusTx = document.getElementById('load-status-text');
+function loadSetStatus(text, cls) {
+    loadStatusTx.textContent = text;
+    loadStatus.className = 'status' + (cls ? ' ' + cls : '');
+}
+function loadSetWorking(on) { loadSpinner.style.display = on ? '' : 'none'; }
 const phraseInput = document.getElementById('phrase');
 const langSelect  = document.getElementById('lang');
 const numSamples  = document.getElementById('num-samples');
@@ -113,6 +121,14 @@ const btnGenerate = document.getElementById('btn-generate');
 const ipaOut      = document.getElementById('ipa-out');
 const genProgress = document.getElementById('gen-progress');
 const genStatus   = document.getElementById('gen-status');
+const genSpinner  = document.getElementById('gen-spinner');
+const genStatusTx = document.getElementById('gen-status-text');
+
+function genSetStatus(text, cls) {
+    genStatusTx.textContent = text;
+    genStatus.className = 'status' + (cls ? ' ' + cls : '');
+}
+function genSetWorking(on) { genSpinner.style.display = on ? '' : 'none'; }
 const audioList   = document.getElementById('audio-list');
 
 function checkFiles() {
@@ -123,34 +139,40 @@ fileConfig.addEventListener('change', checkFiles);
 
 btnLoad.addEventListener('click', async () => {
     btnLoad.disabled = true;
-    loadStatus.textContent = 'Loading…';
-    loadStatus.className = 'status';
+    loadSetWorking(true);
+    loadSetStatus('Loading…');
+    await new Promise(r => requestAnimationFrame(r));
     try {
         const [modelBuf, configText] = await Promise.all([
             fileModel.files[0].arrayBuffer(),
             fileConfig.files[0].text(),
         ]);
         voiceConfig = JSON.parse(configText);
-        ortSession  = await ort.InferenceSession.create(modelBuf, { executionProviders: ['wasm'] });
-        loadStatus.textContent = '✓ Model loaded — ' + voiceConfig.audio.sample_rate + ' Hz, ' +
-            (voiceConfig.num_speakers ?? 1) + ' speaker(s)';
-        loadStatus.className = 'status ok';
+        if (modelBlobUrl) URL.revokeObjectURL(modelBlobUrl);
+        modelBlobUrl = URL.createObjectURL(new Blob([modelBuf]));
+        loadSetStatus('✓ Model ready — ' + voiceConfig.audio.sample_rate + ' Hz, ' +
+            (voiceConfig.num_speakers ?? 1) + ' speaker(s)', 'ok');
         btnGenerate.disabled = false;
         updatePrereqs();
     } catch (e) {
-        loadStatus.textContent = 'Error: ' + e.message;
-        loadStatus.className = 'status err';
+        loadSetStatus('Error: ' + e.message, 'err');
         btnLoad.disabled = false;
+    } finally {
+        loadSetWorking(false);
     }
 });
 
 btnGenerate.addEventListener('click', async () => {
-    if (!ortSession || !voiceConfig) return;
+    if (!modelBlobUrl || !voiceConfig) return;
     btnGenerate.disabled = true;
     audioList.innerHTML  = '';
     ipaOut.textContent   = '';
-    genStatus.textContent = '';
+    genSetStatus('');
+    genSetWorking(true);
+    genProgress.value = 0;
+    genProgress.max   = 1;
     genProgress.style.display = 'block';
+    await new Promise(r => requestAnimationFrame(r));
     genProgress.value = 0;
     genProgress.max   = 1;
 
@@ -159,13 +181,14 @@ btnGenerate.addEventListener('click', async () => {
     const count = Math.max(1, parseInt(numSamples.value) || 10);
 
     try {
-        ipaOut.textContent = 'IPA: ' + textToIpa(text, lang);
+        const espeakVoice = voiceConfig?.espeak?.voice ?? lang;
+        ipaOut.textContent = 'IPA: ' + textToIpa(text, espeakVoice);
 
-        const samples = await generateSamples(ortSession, voiceConfig, text, lang, count,
+        const samples = await generateSamples(modelBlobUrl, voiceConfig, text, lang, count,
             (done, total) => {
                 genProgress.value = done;
                 genProgress.max   = total;
-                genStatus.textContent = done + ' / ' + total;
+                genSetStatus(done + ' / ' + total);
             });
 
         audioList.innerHTML = '';
@@ -194,13 +217,12 @@ btnGenerate.addEventListener('click', async () => {
             audioList.appendChild(item);
         });
 
-        genStatus.textContent = count + ' samples generated.';
-        genStatus.className = 'status ok';
+        genSetStatus(count + ' samples generated.', 'ok');
     } catch (e) {
-        genStatus.textContent = 'Error: ' + e.message;
-        genStatus.className = 'status err';
+        genSetStatus('Error: ' + e.message, 'err');
         console.error(e);
     } finally {
+        genSetWorking(false);
         genProgress.style.display = 'none';
         btnGenerate.disabled = false;
     }
@@ -273,6 +295,18 @@ const negUrlInput = document.getElementById('neg-url');
 const negDlBtn    = document.getElementById('neg-dl-btn');
 const negProgress = document.getElementById('neg-progress');
 const negClearBtn = document.getElementById('neg-clear-btn');
+
+document.getElementById('neg-bundled-link').addEventListener('click', e => {
+    e.preventDefault();
+    negUrlInput.value = 'negatives.mwwn';
+    negDlBtn.click();
+});
+
+document.getElementById('noise-bundled-link').addEventListener('click', e => {
+    e.preventDefault();
+    document.getElementById('noise-url').value = 'noise.mwwb';
+    document.getElementById('noise-dl-btn').click();
+});
 
 function negSetStatus(text, cls) {
     negStatus.textContent = text;
@@ -593,7 +627,7 @@ function drawLossChart(canvas, losses) {
 // ── Prepare phase ─────────────────────────────────────────────────────────────
 
 trainPrepareBtn.addEventListener('click', async () => {
-    if (!ortSession || !voiceConfig || !negCats) {
+    if (!modelBlobUrl || !voiceConfig || !negCats) {
         trainStatus.textContent = 'Prerequisites not met — check status badges above.';
         trainStatus.className = 'status err';
         return;
@@ -612,7 +646,7 @@ trainPrepareBtn.addEventListener('click', async () => {
         await ensureIRs();   // lazy-load impulse responses for augmentation
 
         const raw = await generateSamples(
-            ortSession, voiceConfig,
+            modelBlobUrl, voiceConfig,
             trainPhraseIn.value.trim() || 'hey lumus',
             trainLangSel.value,
             count,

@@ -20,7 +20,11 @@ async function initPhonemizer() {
 // e.g. textToIpa('hey lumus', 'en') → 'h eɪ l uː m ə s'
 function textToIpa(text, lang) {
     if (!_phonemizeModule) throw new Error('Phonemizer not initialised');
-    const ptr = _phonemizeModule.ccall('phonemize', 'number', ['string', 'string'], [text, lang]);
+    let ptr = _phonemizeModule.ccall('phonemize', 'number', ['string', 'string'], [text, lang]);
+    if (ptr === 0 && lang.includes('-')) {
+        const base = lang.split('-')[0];
+        ptr = _phonemizeModule.ccall('phonemize', 'number', ['string', 'string'], [text, base]);
+    }
     if (ptr === 0) throw new Error('phonemize() returned null for "' + text + '"');
     const ipa = _phonemizeModule.UTF8ToString(ptr);
     _phonemizeModule.ccall('phonemize_free', null, ['number'], [ptr]);
@@ -34,16 +38,23 @@ function textToIpa(text, lang) {
 function ipaToIds(ipa, phonemeIdMap) {
     const bos = phonemeIdMap['^']?.[0] ?? 1;
     const eos = phonemeIdMap['$']?.[0] ?? 2;
+    const pad = phonemeIdMap['_']?.[0] ?? 0;
 
     const tokens = ipa.split(' ').filter(t => t.length > 0);
-    const ids = [bos];
+    const ids = [bos, pad];  // BOS + PAD
 
     for (const tok of tokens) {
         const mapped = phonemeIdMap[tok];
         if (mapped) {
             for (const id of mapped) ids.push(id);
+            ids.push(pad);
+        } else {
+            // Multi-char tokens like "tʃ" or "ˈi": each codepoint is its own phoneme
+            for (const ch of tok) {
+                const chMapped = phonemeIdMap[ch];
+                if (chMapped) { for (const id of chMapped) ids.push(id); ids.push(pad); }
+            }
         }
-        // unknown phonemes are silently skipped
     }
 
     ids.push(eos);
@@ -95,7 +106,8 @@ async function synthesise(session, voiceConfig, text, lang, noiseScale, lengthSc
     const sampleRate   = voiceConfig.audio.sample_rate;
     const phonemeIdMap = voiceConfig.phoneme_id_map;
 
-    const ipa        = textToIpa(text, lang);
+    const espeakVoice = voiceConfig.espeak?.voice ?? lang;
+    const ipa        = textToIpa(text, espeakVoice);
     const phonemeIds = ipaToIds(ipa, phonemeIdMap);
 
     const feeds = {
@@ -118,24 +130,73 @@ async function synthesise(session, voiceConfig, text, lang, noiseScale, lengthSc
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-// Generate `count` diverse WAV samples for `text`.
-// Returns an array of { wav: Blob, sampleRate, ipa, noiseScale, lengthScale, noiseW }.
-async function generateSamples(session, voiceConfig, text, lang, count, onProgress) {
-    const results = [];
-    for (let i = 0; i < count; i++) {
-        // Vary noise_scale and noise_w for diversity; keep length_scale near 1.
-        const noiseScale  = 0.3  + Math.random() * 0.7;   // [0.3, 1.0]
-        const lengthScale = 0.85 + Math.random() * 0.3;   // [0.85, 1.15]
-        const noiseW      = 0.2  + Math.random() * 1.3;   // [0.2, 1.5]
+// Generate `count` diverse WAV samples for `text` using a worker pool.
+// modelUrl: Blob URL (or any fetchable URL) of the .onnx model file.
+// Returns an array of { wav: Blob, sampleRate, ipa, noiseScale, lengthScale, noiseW }
+// in sample-index order.
+async function generateSamples(modelUrl, voiceConfig, text, lang, count, onProgress) {
+    const sampleRate  = voiceConfig.audio.sample_rate;
+    const numSpeakers = voiceConfig.num_speakers ?? 1;
+    const espeakVoice = voiceConfig.espeak?.voice ?? lang;
 
-        const result = await synthesise(session, voiceConfig, text, lang,
-                                        noiseScale, lengthScale, noiseW);
-        result.noiseScale  = noiseScale;
-        result.lengthScale = lengthScale;
-        result.noiseW      = noiseW;
-        results.push(result);
+    // Compute phoneme IDs once on the main thread (espeak-ng is already loaded here).
+    const ipa        = textToIpa(text, espeakVoice);
+    const phonemeIds = ipaToIds(ipa, voiceConfig.phoneme_id_map);
 
-        if (onProgress) onProgress(i + 1, count);
-    }
-    return results;
+    // Pool size: up to 4 workers (keeps memory reasonable; each loads a full ORT session).
+    const poolSize = Math.min(count, navigator.hardwareConcurrency || 4, 4);
+    const workers  = Array.from({ length: poolSize }, () => new Worker('js/piper_worker.js'));
+
+    // Init all workers in parallel; each fetches the model from the Blob URL independently.
+    await Promise.all(workers.map(w => new Promise((resolve, reject) => {
+        const h = ({ data }) => {
+            if (data.type === 'ready') { w.removeEventListener('message', h); resolve(); }
+            if (data.type === 'error') { w.removeEventListener('message', h); reject(new Error(data.message)); }
+        };
+        w.addEventListener('message', h);
+        w.postMessage({ type: 'init', modelUrl, sampleRate, numSpeakers });
+    })));
+
+    // Map + reduce: dispatch items to idle workers, collect results in order.
+    const results = new Array(count);
+    let nextId = 0, doneCount = 0;
+
+    return new Promise((resolve, reject) => {
+        function dispatch(worker) {
+            if (nextId >= count) return;
+            const id          = nextId++;
+            const noiseScale  = 0.3  + Math.random() * 0.7;   // [0.3, 1.0]
+            const lengthScale = 0.85 + Math.random() * 0.3;   // [0.85, 1.15]
+            const noiseW      = 0.2  + Math.random() * 1.3;   // [0.2, 1.5]
+            const idsBuf      = phonemeIds.buffer.slice(0);    // copy for transfer
+
+            const h = ({ data }) => {
+                if (data.id !== id) return;
+                worker.removeEventListener('message', h);
+                if (data.type === 'error') {
+                    workers.forEach(w => w.terminate());
+                    reject(new Error('sample ' + id + ': ' + data.message));
+                    return;
+                }
+                results[id] = {
+                    wav:         new Blob([data.wavBuf], { type: 'audio/wav' }),
+                    sampleRate:  data.sampleRate,
+                    ipa,
+                    noiseScale:  data.noiseScale,
+                    lengthScale: data.lengthScale,
+                    noiseW:      data.noiseW,
+                };
+                doneCount++;
+                if (onProgress) onProgress(doneCount, count);
+                if (doneCount === count) { workers.forEach(w => w.terminate()); resolve(results); }
+                else dispatch(worker);
+            };
+            worker.addEventListener('message', h);
+            worker.postMessage(
+                { type: 'synthesise', id, phonemeIdsBuf: idsBuf, noiseScale, lengthScale, noiseW },
+                [idsBuf]
+            );
+        }
+        workers.forEach(w => dispatch(w));
+    });
 }
