@@ -4,7 +4,7 @@
   "author": "aadjiman",
   "model": "turn_on.tflite",
   "trained_languages": ["es"],
-  "version": 1,
+  "version": 2,
   "micro": {
     "probability_cutoff": 0.76,
     "feature_step_size": 10,

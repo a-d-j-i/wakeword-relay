@@ -9,6 +9,14 @@
 
 esphome:
   name: wakeword-relay
+  on_boot:
+    # Relay boots OFF (ALWAYS_OFF) -> show red to match the "off" state.
+    then:
+      - light.turn_on:
+          id: onboard_led
+          red: 100%
+          green: 0%
+          blue: 0%
 
 # --- ESP32-S3 N16R8: 16MB flash, 8MB OCTAL PSRAM. esp-idf is REQUIRED for
 #     micro_wake_word (it won't build under the Arduino framework). ----------
@@ -61,11 +69,32 @@ micro_wake_word:
             lambda: 'return wake_word == "turn_on";'
           then:
             - switch.turn_on: relay
+            - light.turn_on:
+                id: onboard_led
+                red: 0%
+                green: 100%
+                blue: 0%
       - if:
           condition:
             lambda: 'return wake_word == "turn_off";'
           then:
             - switch.turn_off: relay
+            - light.turn_on:
+                id: onboard_led
+                red: 100%
+                green: 0%
+                blue: 0%
+
+# --- Onboard addressable RGB LED. GPIO48 on the ESP32-S3-DevKitC-1 (v1.x).
+#     If your board is an older revision and it stays dark, try GPIO38. ------
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO48
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true                    # local indicator only, not exposed
 
 # --- Relay output. Placeholder pin -- set to whatever drives your relay. ----
 switch:
