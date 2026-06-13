@@ -88,12 +88,13 @@ function _resampleTo16k(samples, srcRate) {
 }
 
 // Process a Float32Array of audio through the WASM MicroFrontend.
-// Returns { features: Int8Array (T * 40), T } or null if WASM is not ready.
-// Requires web_trainer.js to be loaded with HEAPU8 in EXPORTED_RUNTIME_METHODS.
+// Returns { features: Uint16Array (T * 40), T } or null if WASM is not ready.
+// The MicroFrontend emits uint16 (range ~0..670); reading it as bytes would wrap
+// every value > 255. Requires HEAPU16 in EXPORTED_RUNTIME_METHODS.
 function audioToSpectrogram(samples, sampleRate) {
     if (!window.webTrainerReady || !window.Module) return null;
-    if (!Module.HEAPU8) {
-        console.warn('spectrogram: HEAPU8 not exported — rebuild with HEAPU8 in EXPORTED_RUNTIME_METHODS');
+    if (!Module.HEAPU16) {
+        console.warn('spectrogram: HEAPU16 not exported — rebuild with HEAPU16 in EXPORTED_RUNTIME_METHODS');
         return null;
     }
 
@@ -106,7 +107,7 @@ function audioToSpectrogram(samples, sampleRate) {
 
     const fe       = Module.ccall('frontend_create', 'number', [], []);
     const maxFrames = Math.ceil(int16.length / 160) + 10;
-    const featPtr  = Module._malloc(maxFrames * 40);
+    const featPtr  = Module._malloc(maxFrames * 40 * 2);  // uint16: 2 bytes per feature
     const pcmBytes = new Uint8Array(int16.buffer);
 
     const T = Module.ccall('frontend_process', 'number',
@@ -116,8 +117,9 @@ function audioToSpectrogram(samples, sampleRate) {
     Module.ccall('frontend_destroy', null, ['number'], [fe]);
 
     // Copy features out of WASM heap before freeing
-    const features = new Int8Array(T * 40);
-    for (let i = 0; i < T * 40; i++) features[i] = Module.HEAPU8[featPtr + i];
+    const features = new Uint16Array(T * 40);
+    const base = featPtr >> 1;  // HEAPU16 is indexed in 16-bit words
+    for (let i = 0; i < T * 40; i++) features[i] = Module.HEAPU16[base + i];
 
     Module._free(featPtr);
     return { features, T };

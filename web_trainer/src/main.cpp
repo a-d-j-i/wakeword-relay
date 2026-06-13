@@ -18,7 +18,7 @@ static constexpr int kSampleRate       = 16000;
 static constexpr int kWindowSizeMs     = 30;
 static constexpr int kWindowStepMs     = 10;
 static constexpr int kNumFilterbanks   = 40;
-static constexpr int kNumFeatures      = 40;  // one frame = 40 int8 values
+static constexpr int kNumFeatures      = 40;  // one frame = 40 uint16 values
 
 struct Frontend {
     FrontendState state;
@@ -56,9 +56,14 @@ Frontend* frontend_create() {
 
 // Process one chunk of int16 PCM audio.
 // Returns number of feature frames generated (0 or 1 per step-sized chunk).
-// features_out must point to a buffer of at least (return_value * kNumFeatures) int8 values.
+// features_out must point to a buffer of at least (return_value * kNumFeatures)
+// uint16 values.  The MicroFrontend emits uint16 (out_type=uint16, out_scale=1) and
+// routinely exceeds 255 for speech (range ~0..670); callers multiply by 0.0390625
+// (=1/25.6) to get the float feature, exactly like microWakeWord (inference.py:94,
+// data.py:269/299/390).  Truncating to int8 here would wrap every value > 255 mod
+// 256, corrupting precisely the loud frames that carry the wake word.
 int frontend_process(Frontend* fe, const int16_t* pcm, int num_samples,
-                     int8_t* features_out) {
+                     uint16_t* features_out) {
     size_t num_samples_remaining = (size_t)num_samples;
     const int16_t* input = pcm;
     int frames = 0;
@@ -72,8 +77,7 @@ int frontend_process(Frontend* fe, const int16_t* pcm, int num_samples,
 
         if (output.size > 0) {
             for (size_t i = 0; i < output.size; ++i)
-                features_out[frames * kNumFeatures + i] =
-                    static_cast<int8_t>(output.values[i]);
+                features_out[frames * kNumFeatures + i] = output.values[i];
             ++frames;
         }
     }

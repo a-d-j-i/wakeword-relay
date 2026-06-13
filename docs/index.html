@@ -6,7 +6,7 @@
 <style>
   body  { font-family: monospace; background: #111; color: #eee; margin: 0; padding: 30px; }
   #layout { display: flex; gap: 36px; align-items: flex-start; }
-  #col-left  { flex: 1 1 0; min-width: 0; }
+  #col-left  { flex: 0 0 280px; }
   #col-right { flex: 1 1 0; min-width: 0; }
   pre   { background: #1a1a1a; padding: 16px; border-radius: 6px; white-space: pre-wrap; }
   h3    { color: #6cf; margin-top: 32px; }
@@ -25,32 +25,76 @@
   /* mic detection panel */
   #mic-panel { background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
                padding: 18px 22px; margin-top: 10px;
-               display: flex; gap: 28px; align-items: flex-start;
                transition: box-shadow 0.1s; }
   #mic-panel.flash { box-shadow: 0 0 40px 8px #fa3; border-color: #fa3; }
-  #mic-left   { flex: 0 0 260px; }
-  #mic-wave   { width: 100%; height: 48px; background: #0d0d0d; border-radius: 4px;
-                display: block; margin-bottom: 12px; }
-  .mic-label  { color: #444; font-size: 0.72em; margin-bottom: 3px; }
-  #mic-right  { flex: 1; border-left: 1px solid #2a2a2a; padding-left: 20px;
-                min-width: 0; }
+  #mic-top  { display: flex; gap: 28px; align-items: flex-start; }
+  #mic-left { flex: 0 0 280px; }
+  #mic-wave { width: 100%; height: 48px; background: #0d0d0d; border-radius: 4px;
+              display: block; margin-bottom: 4px; }
+  #mic-spec { width: 100%; height: 160px; background: #0d0d0d; border-radius: 4px;
+              display: block; image-rendering: pixelated; }
+  #mic-spec-wrap { margin-top: 16px; }
+  .mic-label  { color: #555; font-size: 0.72em; margin-bottom: 3px; }
+  #mic-right  { flex: 1; border-left: 1px solid #2a2a2a; padding-left: 20px; min-width: 0; }
   .score-num  { font-size: 2.4em; font-weight: bold; color: #6cf; }
   .detected   { font-size: 1.1em; font-weight: bold; color: #fa3; min-height: 1.5em; margin-top: 4px; }
   #mic-log    { height: 200px; overflow-y: auto; font-size: 0.85em; color: #888; }
   #mic-log .entry { border-bottom: 1px solid #222; padding: 3px 0; }
   #mic-log .entry.hit { color: #fa3; font-weight: bold; }
 
-  /* model status badge */
+  /* spectrogram in WAV section */
+  .wav-spec { display: none; width: 100%; height: 160px; background: #0d0d0d;
+              border-radius: 4px; margin: 8px 0; image-rendering: pixelated; }
+
+  /* badges */
   .badge { display: inline-block; font-size: 0.75em; padding: 2px 8px;
-           border-radius: 10px; vertical-align: middle; margin-left: 10px; }
-  .badge.unloaded { background: #333; color: #888; }
-  .badge.loaded   { background: #1a3a1a; color: #6f6; }
+           border-radius: 10px; vertical-align: middle; margin-left: 8px; }
+  .badge.unloaded  { background: #333; color: #888; }
+  .badge.loaded    { background: #1a3a1a; color: #6f6; }
+  .badge.wasm-init { background: #2a2a1a; color: #aa8; }
+  .badge.wasm-ok   { background: #1a2a3a; color: #68f; }
+  .badge.wasm-err  { background: #3a1a1a; color: #f66; }
+
+  /* styled file-pick labels */
+  .file-btn { display: inline-block; background: #2a6; color: #fff; border-radius: 5px;
+              padding: 7px 16px; font-size: 0.95em; cursor: pointer; margin-top: 6px;
+              transition: background 0.15s; user-select: none; }
+  .file-btn:hover { background: #3b8; }
+  .file-btn input[type=file] { display: none; }
+  .file-name { color: #777; font-size: 0.82em; margin-left: 8px; vertical-align: middle; }
+
+  /* model library */
+  #model-list { margin-top: 8px; }
+  .model-row  { display: flex; align-items: center; gap: 5px; padding: 5px 8px;
+                border-radius: 5px; margin-bottom: 3px; background: #1e1e1e;
+                cursor: pointer; transition: background 0.1s; }
+  .model-row:hover { background: #252525; }
+  .model-row.active { background: #162616; border-left: 3px solid #2a6; padding-left: 5px; }
+  .model-row .mname { flex: 1; font-size: 0.86em; color: #999; overflow: hidden;
+                       text-overflow: ellipsis; white-space: nowrap; }
+  .model-row.active .mname  { color: #6f6; }
+  .model-row.focused        { outline: 1px solid #2a6; }
+  .model-row.focused .mname { color: #adf; }
+  .model-row .del { flex: 0 0 auto; background: none; color: #555; border: none;
+                    font-size: 1em; cursor: pointer; padding: 0 4px; line-height: 1; }
+  .model-row .del:hover { color: #f55; }
+  .play-btn { background: #1a3a1a; color: #6f6; border: 1px solid #2a5a2a;
+              border-radius: 3px; padding: 2px 8px; font-size: 0.9em; cursor: pointer; }
+  .play-btn:hover { background: #2a4a2a; }
+  .play-btn.playing { background: #3a1a1a; color: #f66; border-color: #5a2a2a; }
 
   /* locked sections */
-  .locked { opacity: 0.3; pointer-events: none; user-select: none;
-            transition: opacity 0.3s; }
-  .unlocked { opacity: 1; pointer-events: auto;
-              transition: opacity 0.3s; }
+  .locked   { opacity: 0.3; pointer-events: none; user-select: none; transition: opacity 0.3s; }
+  .unlocked { opacity: 1; pointer-events: auto; transition: opacity 0.3s; }
+
+  /* tabs (right column) */
+  .tab-bar  { display: flex; gap: 0; margin-bottom: 0; border-bottom: 2px solid #2a6; }
+  .tab-btn  { background: #1a1a1a; color: #666; border: 1px solid #333; border-bottom: none;
+              border-radius: 6px 6px 0 0; padding: 8px 20px; cursor: pointer;
+              font: inherit; font-size: 0.95em; margin-right: 4px; transition: color 0.15s; }
+  .tab-btn:hover  { color: #aaa; }
+  .tab-btn.active { background: #1a1a1a; color: #6cf; border-color: #2a6; border-bottom-color: #1a1a1a; }
+  .tab-panel      { padding: 18px 0 0 0; }
 
   /* directory table */
   table  { border-collapse: collapse; width: 100%; margin-top: 10px; }
@@ -58,69 +102,108 @@
   th     { background: #1a1a1a; color: #6cf; text-align: left;
            position: sticky; top: 0; z-index: 1; }
   tr.hit td { background: #1a2a1a; }
-  .progress  { color: #888; font-size: 0.9em; margin: 6px 0; }
+  .progress { color: #888; font-size: 0.9em; margin: 6px 0; }
 </style>
 </head>
 <body>
 <div id="layout">
 
-<!-- ══ LEFT: model + mic ════════════════════════════════════════════ -->
+<!-- ══ LEFT: model loader ════════════════════════════════════════════ -->
 <div id="col-left">
 <h2>Wake Word Tester</h2>
+<span class="badge wasm-init" id="wasm-badge">WASM loading…</span>
 
-<h3>Load model <span class="badge unloaded" id="model-badge">not loaded</span></h3>
-<input type="file" id="model-file" accept=".tflite">
-<pre id="out-model">Pick a .tflite file above.</pre>
-
-<div id="section-mic" class="locked">
-<h3>Live mic</h3>
-<button id="btn-mic-start" disabled>Start mic</button>
-<button id="btn-mic-stop" class="stop" disabled>Stop</button>
-<div style="margin-top:8px;color:#aaa;font-size:0.9em">
-  Threshold:
-  <input type="range" id="thr" min="0.1" max="0.99" step="0.01" value="0.5"
-         style="width:160px;vertical-align:middle">
-  <span id="thr-val">0.50</span>
-</div>
-<div id="mic-panel">
-  <div id="mic-left">
-    <div class="mic-label">mic input</div>
-    <canvas id="mic-wave"></canvas>
-    <div class="mic-label">detection score</div>
-    <span class="score-num" id="mic-score">—</span>
-    <div class="bar-bg"><div class="bar" id="mic-bar"></div></div>
-    <div class="detected" id="mic-detected"></div>
-  </div>
-  <div id="mic-right">
-    <div style="color:#888;font-size:0.85em;margin-bottom:6px">Detection log</div>
-    <div id="mic-log"></div>
-  </div>
-</div>
-</div><!-- /section-mic -->
+<h3 style="margin-top:22px">
+  Models
+  <span class="badge unloaded" id="model-badge">none</span>
+</h3>
+<label class="file-btn">
+  + Add model
+  <input type="file" id="model-file" accept=".tflite" multiple>
+</label>
+<div id="model-list"></div>
+<pre id="out-model" style="margin-top:14px;font-size:0.78em;line-height:1.5">Add a .tflite file.</pre>
+<label style="display:block;margin-top:10px;font-size:0.82em;color:#aaa;cursor:pointer"
+       title="Quantize features with ESPHome's fixed on-device formula: int8 = round(u16×256/666) − 128, instead of the model's own input scale.">
+  <input type="checkbox" id="esp32-mode" style="vertical-align:middle"> ESP32 exact quant
+</label>
+<div id="esp32-qinfo" style="font-size:0.74em;color:#666;margin-top:3px"></div>
 </div><!-- /col-left -->
 
 <!-- ══ RIGHT: wav + directory ═══════════════════════════════════════ -->
 <div id="col-right">
 
-<div id="section-wav" class="locked">
-<h3>Test WAV file</h3>
-<input type="file" id="audio-file" accept=".wav,audio/*">
-<button id="btn-test" disabled>Run inference</button>
-<pre id="out-test">Pick a WAV file.</pre>
-</div>
+<h3 style="margin-top:10px">Test model</h3>
+<div id="section-tabs" class="locked">
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="mic" onclick="switchRightTab('mic')">Live mic</button>
+    <button class="tab-btn" data-tab="wav" onclick="switchRightTab('wav')">Test WAV</button>
+    <button class="tab-btn" data-tab="dir" onclick="switchRightTab('dir')">Scan directory</button>
+  </div>
 
-<div id="section-dir" class="locked">
-<h3>Scan directory</h3>
-<input type="file" id="dir-input" webkitdirectory>
-<button id="btn-scan" disabled>Scan</button>
-<div class="progress" id="dir-progress"></div>
-<div id="dir-summary"></div>
-<div id="dir-scroll" style="max-height:360px;overflow-y:auto;margin-top:8px">
-  <table id="dir-table" style="display:none">
-    <thead><tr><th>File</th><th>Peak score</th><th>Detected</th><th>Peak at</th></tr></thead>
-    <tbody id="dir-tbody"></tbody>
-  </table>
-</div>
+  <!-- ── Live mic ── -->
+  <div id="section-mic" class="tab-panel">
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button id="btn-mic-start" disabled>Start mic</button>
+      <button id="btn-mic-stop" class="stop" disabled>Stop</button>
+      <span style="color:#aaa;font-size:0.9em">
+        Threshold:
+        <input type="range" id="thr" min="0.1" max="0.99" step="0.01" value="0.5"
+               style="width:140px;vertical-align:middle">
+        <span id="thr-val">0.50</span>
+      </span>
+    </div>
+    <div id="mic-panel">
+      <div id="mic-top">
+        <div id="mic-left">
+          <div class="mic-label">mic input</div>
+          <canvas id="mic-wave"></canvas>
+          <div class="mic-label">detection score</div>
+          <span class="score-num" id="mic-score">—</span>
+          <div class="bar-bg"><div class="bar" id="mic-bar"></div></div>
+          <div class="detected" id="mic-detected"></div>
+        </div>
+        <div id="mic-right">
+          <div style="color:#888;font-size:0.85em;margin-bottom:6px">Detection log</div>
+          <div id="mic-log"></div>
+        </div>
+      </div>
+      <div id="mic-spec-wrap">
+        <div class="mic-label">mel spectrogram (10 ms/col, low freq = bottom)</div>
+        <canvas id="mic-spec"></canvas>
+      </div>
+    </div>
+  </div><!-- /section-mic -->
+
+  <!-- ── Test WAV ── -->
+  <div id="section-wav" class="tab-panel" style="display:none">
+    <div style="margin-top:10px">
+      <label class="file-btn">Choose WAV<input type="file" id="audio-file" accept=".wav,audio/*"></label>
+      <span class="file-name" id="audio-file-name"></span>
+    </div>
+    <button id="btn-test" disabled style="margin-top:8px">Run inference</button>
+    <button id="btn-play-wav" class="play-btn" disabled style="margin-top:8px">▶ Play</button>
+    <canvas id="wav-spec" class="wav-spec"></canvas>
+    <div id="out-test" style="background:#1a1a1a;padding:16px;border-radius:6px;
+         font-family:monospace;font-size:0.85em;margin-top:8px">Pick a WAV file.</div>
+  </div>
+
+  <!-- ── Scan directory ── -->
+  <div id="section-dir" class="tab-panel" style="display:none">
+    <div style="margin-top:10px">
+      <label class="file-btn">Choose directory<input type="file" id="dir-input" webkitdirectory></label>
+      <span class="file-name" id="dir-input-name"></span>
+    </div>
+    <button id="btn-scan" disabled style="margin-top:8px">Scan</button>
+    <div class="progress" id="dir-progress"></div>
+    <div id="dir-summary"></div>
+    <div id="dir-scroll" style="max-height:360px;overflow-y:auto;margin-top:8px">
+      <table id="dir-table" style="display:none">
+        <thead><tr><th>File</th><th>Peak score</th><th>Det</th><th>Peak at</th><th>▶</th></tr></thead>
+        <tbody id="dir-tbody"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 </div><!-- /col-right -->
@@ -128,378 +211,916 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
+<script src="web_trainer.js"></script>
 <script>
+'use strict';
+
 tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/wasm/');
 tf.setBackend('cpu');
 
 // ── globals ───────────────────────────────────────────────────────────────────
-let model = null;
+let model  = null;
+let Module = null;  // WASM module (micro frontend + mixednet)
 
-// ── quant params ──────────────────────────────────────────────────────────────
-const IN_SCALE  = 0.10196079;
-const IN_ZP     = -128;
-const OUT_SCALE = 0.00390625;
-
-// ── microfrontend constants ───────────────────────────────────────────────────
+// ── MicroFrontend constants — must match ESP32 preprocessor_settings.h ────────
+// Window 30ms=480 samples, step 10ms=160 samples, 40 mel bins, 16kHz
 const SR    = 16000;
-const WIN   = 480;
-const STEP  = 320;
-const NFFT  = 512;
+const STEP  = 160;   // samples per frame step (10 ms) — matches kWindowStepMs=10
 const NMELS = 40;
 
-// ── mel filterbank (precomputed) ──────────────────────────────────────────────
-const MEL_FB = (() => {
-    const hzToMel = hz => 2595 * Math.log10(1 + hz / 700);
-    const melToHz = mel => 700 * (10 ** (mel / 2595) - 1);
-    const N = NFFT / 2 + 1;
-    const melMin = hzToMel(125), melMax = hzToMel(7500);
-    const pts  = Array.from({length: NMELS+2}, (_, i) => melMin + i*(melMax-melMin)/(NMELS+1));
-    const bins = pts.map(m => Math.floor(melToHz(m) * NFFT / SR));
-    return Array.from({length: NMELS}, (_, m) => {
-        const f = new Float32Array(N);
-        for (let k = bins[m];   k <  bins[m+1]; k++) f[k] = (k-bins[m])   / (bins[m+1]-bins[m]);
-        for (let k = bins[m+1]; k <= bins[m+2]; k++) f[k] = (bins[m+2]-k) / (bins[m+2]-bins[m+1]);
-        return f;
-    });
+// Output scale: maps raw model output to [0,1].
+// Set dynamically on model load: 1.0 for UINT8 output (TFLite.js dequantizes to float [0,1]),
+// 1/256 for INT8/INT32 raw integer output.
+let OUT_SCALE = 1.0 / 256.0;
+
+// Input quantization. The MicroFrontend emits uint16 features; we map them to the
+// model's int8 input as: int8 = clamp(round(u16 × quantScale) + quantZp, -128, 127).
+//
+// Two modes, selectable via the "ESP32 exact quant" checkbox:
+//  • model mode (default): quantScale = 1/(25.6 × inputScale) read from the model's
+//    own FlatBuffer input tensor — matches microWakeWord inference.py exactly.
+//  • ESP32 mode: quantScale = 256/666, zp = -128 — the FIXED formula ESPHome's
+//    micro_wake_word uses on-device: int8 = round(u16 × 256/666) − 128
+//    (666 = 25.6 × 26, i.e. it assumes input_scale = 26/256 for every model).
+const ESP32_QUANT_SCALE = 256 / 666;   // ≈ 0.38438
+let esp32Mode      = false;            // overridden by the checkbox / saved pref
+let modelQuantScale = 256 / (25.6 * 26);  // parsed per-model; overwritten on load
+let modelQuantZp    = -128;
+let quantScale = modelQuantScale;      // active values used by the quantizers
+let quantZp    = modelQuantZp;
+
+// Apply the active quantization mode to the globals the quantizers read.
+function applyQuantMode() {
+    if (esp32Mode) { quantScale = ESP32_QUANT_SCALE; quantZp = -128; }
+    else           { quantScale = modelQuantScale;   quantZp = modelQuantZp; }
+    const span = document.getElementById('esp32-qinfo');
+    if (span) span.textContent =
+        `qs=${quantScale.toFixed(4)} zp=${quantZp}` + (esp32Mode ? '  (256/666)' : '');
+}
+
+// ── Viridis colormap ──────────────────────────────────────────────────────────
+const VIRIDIS = (() => {
+    const pts = [
+        [0.00,  68,  1,  84], [0.13,  71, 40, 122], [0.25,  59, 82, 139],
+        [0.38,  44,113, 142], [0.50,  33,145, 140], [0.63,  53,183, 121],
+        [0.75,  94,201,  98], [0.88, 177,220,  25], [1.00, 253,231,  37],
+    ];
+    const lut = new Uint8Array(256 * 3);
+    for (let i = 0; i < 256; i++) {
+        const t = i / 255;
+        let j = 0;
+        while (j < pts.length - 2 && pts[j+1][0] <= t) j++;
+        const [t0,r0,g0,b0] = pts[j], [t1,r1,g1,b1] = pts[j+1];
+        const f = t1 > t0 ? (t-t0)/(t1-t0) : 0;
+        lut[i*3]   = Math.round(r0 + (r1-r0)*f);
+        lut[i*3+1] = Math.round(g0 + (g1-g0)*f);
+        lut[i*3+2] = Math.round(b0 + (b1-b0)*f);
+    }
+    return lut;
 })();
 
-const HANN = Float32Array.from({length: WIN}, (_, i) => 0.5 - 0.5 * Math.cos(2*Math.PI*i/WIN));
+// ── WASM loading ──────────────────────────────────────────────────────────────
+const wasmBadge = document.getElementById('wasm-badge');
 
-// ── FFT ───────────────────────────────────────────────────────────────────────
-function fft(re, im) {
-    const n = re.length;
-    for (let i=1,j=0; i<n; i++) {
-        let bit=n>>1;
-        for (; j&bit; bit>>=1) j^=bit;
-        j^=bit;
-        if (i<j) { let t=re[i]; re[i]=re[j]; re[j]=t; t=im[i]; im[i]=im[j]; im[j]=t; }
-    }
-    for (let len=2; len<=n; len<<=1) {
-        const ang=-2*Math.PI/len, wRe=Math.cos(ang), wIm=Math.sin(ang);
-        for (let i=0; i<n; i+=len) {
-            let cRe=1, cIm=0;
-            for (let j=0,h=len>>1; j<h; j++) {
-                const uRe=re[i+j], uIm=im[i+j];
-                const vRe=re[i+j+h]*cRe - im[i+j+h]*cIm;
-                const vIm=re[i+j+h]*cIm + im[i+j+h]*cRe;
-                re[i+j]=uRe+vRe; im[i+j]=uIm+vIm;
-                re[i+j+h]=uRe-vRe; im[i+j+h]=uIm-vIm;
-                const nr=cRe*wRe-cIm*wIm; cIm=cRe*wIm+cIm*wRe; cRe=nr;
-            }
-        }
-    }
-}
-
-// ── single mel frame from a 480-sample window ─────────────────────────────────
-function computeMelFrame(win480) {
-    const N=NFFT/2+1, re=new Float32Array(NFFT), im=new Float32Array(NFFT);
-    for (let i=0; i<WIN; i++) re[i] = win480[i] * HANN[i] * 32768;
-    fft(re, im);
-    const mel = new Float32Array(NMELS);
-    for (let m=0; m<NMELS; m++) {
-        let e=0;
-        for (let k=0; k<N; k++) e += (re[k]*re[k]+im[k]*im[k]) * MEL_FB[m][k];
-        mel[m] = e;
-    }
-    return mel;
-}
-
-// ── raw mel frames for a whole audio buffer ───────────────────────────────────
-function rawMelFrames(audio) {
-    const frames=[];
-    const win=new Float32Array(WIN);
-    for (let start=0; start+STEP<=audio.length; start+=STEP) {
-        win.copyWithin(0, STEP);
-        win.set(audio.subarray(start, start+STEP), WIN-STEP);
-        frames.push(computeMelFrame(win));
-    }
-    return frames;
-}
-
-// ── PCAN ──────────────────────────────────────────────────────────────────────
-const PCAN_SMOOTH = 1/1024, PCAN_SCALE = 5.0;
-
-function applyPcanFrame(mel, noise) {
-    const out = new Float32Array(NMELS);
-    for (let c=0; c<NMELS; c++) {
-        noise[c] += PCAN_SMOOTH * (mel[c]-noise[c]);
-        out[c] = mel[c] / Math.pow(Math.max(noise[c],1e-6), 0.95) * PCAN_SCALE;
-    }
-    return out;
-}
-
-// two-pass version for files (warm noise from clip mean)
-function melSpectrogram(audio) {
-    const raw   = rawMelFrames(audio);
-    const noise = new Float32Array(NMELS);
-    for (let c=0; c<NMELS; c++) noise[c] = raw.reduce((s,f)=>s+f[c],0)/raw.length;
-    return raw.map(mel => applyPcanFrame(mel, noise));
-}
-
-// ── quantize + inference ──────────────────────────────────────────────────────
-function quantize(v) { return Math.max(-128, Math.min(127, Math.round(v/IN_SCALE+IN_ZP))); }
-
-const _inferBuf = new Int32Array(3*NMELS);  // reused every call
-
-function inferThreeFrames(f0, f1, f2) {
-    for (let c=0; c<NMELS; c++) {
-        _inferBuf[c]        = quantize(f0[c]);
-        _inferBuf[NMELS+c]  = quantize(f1[c]);
-        _inferBuf[2*NMELS+c]= quantize(f2[c]);
-    }
-    const inp = tf.tensor(_inferBuf, [1,3,NMELS], 'int32');
-    const out = model.predict(inp);
-    const s = out.dataSync()[0] * OUT_SCALE;
-    inp.dispose(); out.dispose();
-    return s;
-}
-
-function runInference(frames) {
-    const scores=[];
-    for (let i=2; i<frames.length; i++)
-        scores.push(inferThreeFrames(frames[i-2], frames[i-1], frames[i]));
-    return scores;
-}
+createWebTrainer().then(m => {
+    Module = m;
+    wasmBadge.textContent = 'WASM ready ✓';
+    wasmBadge.className   = 'badge wasm-ok';
+}).catch(e => {
+    wasmBadge.textContent = 'WASM failed — serve via HTTP';
+    wasmBadge.className   = 'badge wasm-err';
+    console.error('WASM init failed:', e);
+});
 
 // ── WAV loader ────────────────────────────────────────────────────────────────
-// One shared AudioContext for decoding — browsers cap how many can be created
 let _decodeCtx = null;
 async function loadWav(buf) {
     if (!_decodeCtx || _decodeCtx.state === 'closed')
         _decodeCtx = new AudioContext();
     const decoded = await _decodeCtx.decodeAudioData(buf);
-    const off = new OfflineAudioContext(1, Math.ceil(decoded.duration*SR), SR);
+    const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * SR), SR);
     const src = off.createBufferSource();
-    src.buffer=decoded; src.connect(off.destination); src.start();
+    src.buffer = decoded; src.connect(off.destination); src.start();
     return (await off.startRendering()).getChannelData(0);
 }
 
-// ── score timeline string ─────────────────────────────────────────────────────
-function timeline(scores) {
-    const W=28, step=Math.max(1,Math.floor(scores.length/40));
-    let s='\nScore over time:\n';
-    for (let i=0; i<scores.length; i+=step) {
-        const t=(i*STEP/SR).toFixed(2), v=scores[i];
-        s+=`  ${t}s  ${v.toFixed(3)}  [${'█'.repeat(Math.round(v*W))}${'░'.repeat(W-Math.round(v*W))}]\n`;
+// ── WASM MicroFrontend — full ESP32-identical pipeline ────────────────────────
+// Process a Float32Array through the WASM MicroFrontend (same C code as ESP32).
+// Returns { raw: Uint16Array (T×40 frontend values), T } or null if WASM not ready.
+// The MicroFrontend emits uint16 (range ~0..670); callers scale by 1/25.6 to floats,
+// exactly like microWakeWord. Reading these as bytes would wrap every value > 255.
+function runFrontend(float32Audio) {
+    if (!Module) return null;
+    const int16 = new Int16Array(float32Audio.length);
+    for (let i = 0; i < float32Audio.length; i++)
+        int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32Audio[i] * 32767)));
+
+    const fe = Module.ccall('frontend_create', 'number', [], []);
+    if (!fe) return null;
+
+    const maxT    = Math.ceil(int16.length / STEP) + 4;
+    const featPtr = Module._malloc(maxT * NMELS * 2);  // uint16: 2 bytes per feature
+    // Heap-allocate PCM — 'array' ccall type uses the WASM stack and overflows for long files.
+    const pcmPtr  = Module._malloc(int16.byteLength);
+    Module.HEAPU8.set(new Uint8Array(int16.buffer), pcmPtr);
+
+    const T = Module.ccall('frontend_process', 'number',
+        ['number', 'number', 'number', 'number'],
+        [fe, pcmPtr, int16.length, featPtr]);
+
+    Module._free(pcmPtr);
+    Module.ccall('frontend_destroy', null, ['number'], [fe]);
+
+    const raw = new Uint16Array(T * NMELS);
+    const base = featPtr >> 1;  // HEAPU16 is indexed in 16-bit words
+    for (let i = 0; i < T * NMELS; i++) raw[i] = Module.HEAPU16[base + i];
+    Module._free(featPtr);
+    return { raw, T };
+}
+
+// ── Spectrogram rendering (static, for WAV files) ─────────────────────────────
+// Draw all T frames onto canvas. Auto-scales the value range.
+function drawSpectrogram(canvas, frames, T) {
+    if (T === 0) return;
+    const ROW_H = 4;
+    canvas.width  = T;
+    canvas.height = NMELS * ROW_H;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(T, NMELS * ROW_H);
+
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < T * NMELS; i++) {
+        if (frames[i] < lo) lo = frames[i];
+        if (frames[i] > hi) hi = frames[i];
     }
+    const span = hi > lo ? hi - lo : 1;
+
+    for (let t = 0; t < T; t++) {
+        for (let f = 0; f < NMELS; f++) {
+            const norm  = Math.round((frames[t*NMELS + f] - lo) / span * 255);
+            const yFlip = NMELS - 1 - f;  // low freq at bottom
+            const r = VIRIDIS[norm*3], g = VIRIDIS[norm*3+1], b = VIRIDIS[norm*3+2];
+            for (let dy = 0; dy < ROW_H; dy++) {
+                const px = ((yFlip*ROW_H + dy)*T + t)*4;
+                img.data[px]=r; img.data[px+1]=g; img.data[px+2]=b; img.data[px+3]=255;
+            }
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    canvas.style.display = 'block';
+}
+
+// ── Rolling spectrogram (live mic) ────────────────────────────────────────────
+// 600 columns × 10 ms = 6 seconds of rolling history.
+const SPEC_COLS = 600;
+const SPEC_ROW_H = 4;  // 4 px per mel bin → 160 px canvas height
+
+const micSpecCanvas = document.getElementById('mic-spec');
+let micSpecCtx = null;
+
+function initMicSpec() {
+    micSpecCanvas.width  = SPEC_COLS;
+    micSpecCanvas.height = NMELS * SPEC_ROW_H;
+    micSpecCtx = micSpecCanvas.getContext('2d');
+    micSpecCtx.fillStyle = '#0d0d0d';
+    micSpecCtx.fillRect(0, 0, SPEC_COLS, NMELS * SPEC_ROW_H);
+}
+
+// Append one new frame column to the right of the rolling spectrogram.
+// rawFrame: Uint8Array(40), HEAPU8 values [0,255].
+// Per-column auto-scale so contrast is always good regardless of absolute level.
+function appendSpecFrame(rawFrame) {
+    if (!micSpecCtx) return;
+    micSpecCtx.drawImage(micSpecCanvas, -1, 0);
+    const col = micSpecCtx.createImageData(1, NMELS * SPEC_ROW_H);
+
+    let lo = rawFrame[0], hi = rawFrame[0];
+    for (let f = 1; f < NMELS; f++) {
+        if (rawFrame[f] < lo) lo = rawFrame[f];
+        if (rawFrame[f] > hi) hi = rawFrame[f];
+    }
+    const span = hi > lo ? hi - lo : 1;
+
+    for (let f = 0; f < NMELS; f++) {
+        const norm  = Math.round((rawFrame[f] - lo) / span * 255);
+        const yFlip = NMELS - 1 - f;
+        const r = VIRIDIS[norm*3], g = VIRIDIS[norm*3+1], b = VIRIDIS[norm*3+2];
+        for (let dy = 0; dy < SPEC_ROW_H; dy++) {
+            const px = (yFlip*SPEC_ROW_H + dy)*4;
+            col.data[px]=r; col.data[px+1]=g; col.data[px+2]=b; col.data[px+3]=255;
+        }
+    }
+    micSpecCtx.putImageData(col, SPEC_COLS-1, 0);
+}
+
+// ── Inference ─────────────────────────────────────────────────────────────────
+// Quantize raw Uint8Array spectrogram to int8-range Int32Array for model input.
+// int8 = clamp(round(u8 × quantScale) + quantZp, -128, 127)
+function quantizeFrames(raw, T) {
+    const q = new Int32Array(T * NMELS);
+    for (let i = 0; i < T * NMELS; i++)
+        q[i] = Math.max(-128, Math.min(127, Math.round(raw[i] * quantScale) + quantZp));
+    return q;
+}
+
+// Rolling window buffer for sliding-window models (shape [1,N,40] where N>1).
+// Reset when a new model is loaded or mic starts.
+let inferBuf = null;
+
+function resetInferBuf() {
+    if (!model) return;
+    const T = model.inputs[0].shape[1];
+    inferBuf = new Int32Array(T * NMELS);  // zero-filled = silence padding
+}
+
+// Feed one frame (Int32Array(40)) through the model.
+// Handles both streaming [1,1,40] and sliding-window [1,N,40] models.
+function inferOneFrame(q) {
+    const T   = model.inputs[0].shape[1];
+    let   buf;
+
+    if (T === 1) {
+        buf = new Int32Array(NMELS);
+        buf.set(q.subarray(0, NMELS));
+    } else {
+        if (!inferBuf || inferBuf.length !== T * NMELS) resetInferBuf();
+        inferBuf.copyWithin(0, NMELS);               // shift left by one frame
+        inferBuf.set(q.subarray(0, NMELS), (T-1) * NMELS); // append new frame
+        buf = inferBuf;
+    }
+
+    const inp = tf.tensor(buf, [1, T, NMELS], 'int32');
+    let s = 0;
+    try {
+        const out = model.predict(inp);
+        const raw = out.dataSync()[0];
+        inferOneFrame._count = (inferOneFrame._count || 0) + 1;
+        if (inferOneFrame._count === 1)
+            console.log('[infer] model in:', JSON.stringify(model.inputs[0].shape), model.inputs[0].dtype,
+                        ' out:', JSON.stringify(model.outputs[0].shape), '  T=', T);
+        if (inferOneFrame._count % 100 === 0 || raw > 10)
+            console.log('[infer] frame', inferOneFrame._count,
+                        'in[0..4]:', Array.from(buf.slice(0, 5)),
+                        'raw:', raw, '→', (raw * OUT_SCALE).toFixed(4));
+        s = raw * OUT_SCALE;
+        out.dispose();
+    } catch(e) {
+        if (!inferOneFrame._errOnce) {
+            inferOneFrame._errOnce = true;
+            console.error('[infer] model.predict error:', e);
+        }
+    }
+    inp.dispose();
     return s;
 }
 
-// ── waveform display ──────────────────────────────────────────────────────────
+// Frame-by-frame inference over a WAV file (uses a local window buffer, doesn't touch inferBuf).
+// Returns { scores: number[], peakRaw: number|null } — peakRaw is the max raw model output
+// before OUT_SCALE multiplication (useful for diagnosing output quantization issues).
+function runInference(raw, T) {
+    const frames = quantizeFrames(raw, T);
+    const winT   = model.inputs[0].shape[1];
+    const winBuf = new Int32Array(winT * NMELS);
+
+    // Streaming state tensors in TFLite.js are initialised to byte value 0.
+    // For INT8 quantisation with zp=-128 that means float=+12.8 instead of 0.
+    // Feed silence (quantZp = quantised representation of float 0) for enough
+    // frames to flush all ring buffers before the actual audio begins.
+    // 80 frames > the largest ring buffer depth (66) used by MixedNet streaming.
+    if (winT > 1) {
+        const silBuf = new Int32Array(winT * NMELS).fill(quantZp);
+        for (let w = 0; w < 80; w++) {
+            const inp = tf.tensor(silBuf, [1, winT, NMELS], 'int32');
+            try { const o = model.predict(inp); o.dispose(); } catch(e) {}
+            inp.dispose();
+        }
+    }
+    const scores = [];
+    let peakRaw  = null;
+    for (let i = 0; i < T; i++) {
+        const frame = frames.subarray(i * NMELS, (i+1) * NMELS);
+        if (winT === 1) {
+            scores.push(inferOneFrame(frame));
+        } else {
+            winBuf.copyWithin(0, NMELS);
+            winBuf.set(frame, (winT-1) * NMELS);
+            const inp = tf.tensor(winBuf, [1, winT, NMELS], 'int32');
+            let s = 0;
+            try {
+                const out = model.predict(inp);
+                const r   = out.dataSync()[0];
+                if (peakRaw === null || r > peakRaw) peakRaw = r;
+                if (i < 5 || r > 0)
+                    console.log('[wav] frame', i, 'in[0]:', winBuf[0], 'raw_r:', r, '→', (r*OUT_SCALE).toFixed(5));
+                s = r * OUT_SCALE;
+                out.dispose();
+            } catch(e) { console.warn('[wav] predict error frame', i, e); }
+            inp.dispose();
+            scores.push(s);
+        }
+    }
+    return { scores, peakRaw };
+}
+
+// ── Score timeline — three-column HTML with threshold marker ─────────────────
+function timelineHtml(scores, thr = 0.5) {
+    const NCOLS = 5, W = 14;
+    const step   = Math.max(1, Math.floor(scores.length / (NCOLS * 40)));
+    const thrPos = Math.round(thr * W);
+
+    const rows = [];
+    for (let i = 0; i < scores.length; i += step) {
+        const t      = (i * STEP / SR).toFixed(2);
+        const v      = scores[i];
+        const filled = Math.round(v * W);
+        let bar = '';
+        for (let j = 0; j < W; j++) {
+            if (j === thrPos)    bar += '┊';
+            else if (j < filled) bar += '█';
+            else                 bar += '░';
+        }
+        const color = v >= thr ? '#fa3' : '#666';
+        rows.push(`<span style="color:${color}">${t.padStart(5)}s ${v.toFixed(3)} [${bar}]</span>`);
+    }
+
+    const c    = Math.ceil(rows.length / NCOLS);
+    const cols = Array.from({length: NCOLS}, (_, i) => rows.slice(i*c, (i+1)*c));
+    const legend = `<div style="color:#555;margin-bottom:4px">score over time  ┊ = threshold (${thr.toFixed(2)})</div>`;
+    return legend +
+           `<div style="display:flex;gap:12px;white-space:pre;font-size:0.8em">` +
+           cols.map(col => `<div style="flex:1">${col.join('\n')}</div>`).join('') +
+           `</div>`;
+}
+
+// ── Waveform display ──────────────────────────────────────────────────────────
 const micWaveCanvas = document.getElementById('mic-wave');
 const micWaveCtx    = micWaveCanvas.getContext('2d');
 const WAVE_LEN = 640;
-const micWaveBuf = new Float32Array(WAVE_LEN);  // rolling sample buffer
+const micWaveBuf = new Float32Array(WAVE_LEN);
 
 function drawWaveform(newSamples) {
-    // Shift old samples left, append new ones at the end
     const n = Math.min(newSamples.length, WAVE_LEN);
     micWaveBuf.copyWithin(0, n);
     micWaveBuf.set(newSamples.subarray(0, n), WAVE_LEN - n);
-
     const w = micWaveCanvas.width, h = micWaveCanvas.height;
     micWaveCtx.clearRect(0, 0, w, h);
-
-    // Centre line
-    micWaveCtx.strokeStyle = '#1e3a3a';
-    micWaveCtx.lineWidth = 1;
-    micWaveCtx.beginPath();
-    micWaveCtx.moveTo(0, h/2); micWaveCtx.lineTo(w, h/2);
-    micWaveCtx.stroke();
-
-    // Waveform — muted teal, clearly different from the green/orange bars
-    micWaveCtx.strokeStyle = '#2a7a7a';
-    micWaveCtx.lineWidth = 1.5;
+    micWaveCtx.strokeStyle = '#1e3a3a'; micWaveCtx.lineWidth = 1;
+    micWaveCtx.beginPath(); micWaveCtx.moveTo(0, h/2); micWaveCtx.lineTo(w, h/2); micWaveCtx.stroke();
+    micWaveCtx.strokeStyle = '#2a7a7a'; micWaveCtx.lineWidth = 1.5;
     micWaveCtx.beginPath();
     for (let i = 0; i < WAVE_LEN; i++) {
-        const x = (i / WAVE_LEN) * w;
-        const y = (0.5 - micWaveBuf[i] * 2.5) * h;  // ×2.5 so quiet speech is visible
-        i === 0 ? micWaveCtx.moveTo(x, y) : micWaveCtx.lineTo(x, y);
+        const x = (i/WAVE_LEN)*w, y = (0.5 - micWaveBuf[i]*2.5)*h;
+        i===0 ? micWaveCtx.moveTo(x,y) : micWaveCtx.lineTo(x,y);
     }
     micWaveCtx.stroke();
 }
 
-// ── beep ──────────────────────────────────────────────────────────────────────
+// ── Beep ──────────────────────────────────────────────────────────────────────
 function playBeep() {
     try {
-        const ctx = new AudioContext();
-        const osc = ctx.createOscillator();
-        const g   = ctx.createGain();
+        const ctx = new AudioContext(), osc = ctx.createOscillator(), g = ctx.createGain();
         osc.connect(g); g.connect(ctx.destination);
         osc.frequency.value = 880;
         g.gain.setValueAtTime(0.25, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
-        osc.start(); osc.stop(ctx.currentTime + 0.18);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.18);
+        osc.start(); osc.stop(ctx.currentTime+0.18);
     } catch(e) {}
 }
 
-// ════════════════════════════════════════════════════════════════════
-// 1. MODEL
-// ════════════════════════════════════════════════════════════════════
-document.getElementById('model-file').onchange = async e => {
-    const out=document.getElementById('out-model');
-    if (!e.target.files.length) return;
-    out.textContent='Loading…';
+// ── TFLite FlatBuffer helpers ─────────────────────────────────────────────────
+// Shared FlatBuffer plumbing reused by both quant parsers below.
+function _makeFbHelpers(ab) {
+    const dv  = new DataView(ab);
+    const u32 = p => dv.getUint32(p, true);
+    const i32 = p => dv.getInt32(p, true);
+    const f32 = p => dv.getFloat32(p, true);
+    const u16 = p => dv.getUint16(p, true);
+    const u8  = p => dv.getUint8(p);
+    function fld(tableBase, fieldIdx) {
+        const vt   = tableBase - i32(tableBase);
+        const vtSz = u16(vt);
+        const fo   = 4 + fieldIdx * 2;
+        if (fo >= vtSz) return 0;
+        const off = u16(vt + fo);
+        return off ? tableBase + off : 0;
+    }
+    const deref = pos => pos + u32(pos);
+    function vec(pos) { const v = deref(pos); return { len: u32(v), base: v + 4 }; }
+    return { u32, i32, f32, u16, u8, fld, deref, vec };
+}
+
+// Parse input tensor quantization (scale, zp) from TFLite FlatBuffer.
+// Returns { scale, zp } or null.
+//
+// Tries Tensor.quantization at field 4 (standard TFLite schema) and field 5
+// (web_trainer custom export).  For streaming models the subgraph inputs list
+// includes state tensors before the audio tensor; we use Tensor.shape (field 0)
+// to find the one whose last dimension is 40 (= NMELS, the audio input).
+function parseTFLiteInputQuant(ab) {
     try {
-        model = await tflite.loadTFLiteModel(await e.target.files[0].arrayBuffer());
-        out.textContent = 'Model OK\n' +
-            model.inputs.map(t=>`  ${t.name}  ${JSON.stringify(t.shape)}  ${t.dtype}`).join('\n')+'\n'+
-            model.outputs.map(t=>`  ${t.name}  ${JSON.stringify(t.shape)}  ${t.dtype}`).join('\n');
-        // Unlock all sections
-        ['section-wav','section-dir','section-mic'].forEach(id => {
-            const el = document.getElementById(id);
-            el.classList.remove('locked');
-            el.classList.add('unlocked');
-        });
-        const badge = document.getElementById('model-badge');
-        badge.textContent = 'loaded ✓';
-        badge.className = 'badge loaded';
-        document.getElementById('btn-test').disabled      = !document.getElementById('audio-file').files.length;
-        document.getElementById('btn-scan').disabled      = !document.getElementById('dir-input').files.length;
-        document.getElementById('btn-mic-start').disabled = false;
-    } catch(err) { out.textContent='ERROR: '+err; }
+        const { u32, i32, f32, fld, deref, vec } = _makeFbHelpers(ab);
+
+        function readTensorQuant(tens) {
+            // Field 5 first: web_trainer custom export stores quantization there.
+            // Field 4 second: standard TFLite schema.
+            // Reading the wrong field can return garbage; sanity-check the scale.
+            for (const fi of [5, 4]) {
+                const qFld = fld(tens, fi); if (!qFld) continue;
+                const q    = deref(qFld);
+                const sFld = fld(q, 2);     if (!sFld) continue;
+                const sv   = vec(sFld);     if (sv.len === 0) continue;
+                const scale = f32(sv.base);
+                // Plausible audio-spectrogram quantisation range:
+                // min float ~0, max float ~10 (uint8/25.6) → scale ≈ 0.039.
+                // Reject anything outside (0.001, 0.5) as likely a garbage read.
+                if (!(scale > 0.001 && scale < 0.5)) continue;
+                let zp = -128;
+                const zFld = fld(q, 3);
+                if (zFld) { const zv = vec(zFld); if (zv.len > 0) zp = i32(zv.base); }
+                return { scale, zp };
+            }
+            return null;
+        }
+
+        // Last element of Tensor.shape vector (field 0).
+        function tensorLastDim(tens) {
+            const sf = fld(tens, 0); if (!sf) return -1;
+            const sv = vec(sf);      if (sv.len === 0) return -1;
+            return i32(sv.base + (sv.len - 1) * 4);
+        }
+
+        const modelRoot = u32(0);
+        const sgFld = fld(modelRoot, 2); if (!sgFld) return null;
+        const sg    = vec(sgFld);        if (sg.len === 0) return null;
+        const sg0   = deref(sg.base);
+
+        const inFld = fld(sg0, 1); if (!inFld) return null;
+        const inV   = vec(inFld);  if (inV.len === 0) return null;
+        const tFld  = fld(sg0, 0); if (!tFld) return null;
+        const tVec  = vec(tFld);
+
+        // Pass 1: audio input tensor — last dim must be NMELS (40).
+        // Streaming models list state tensors first; audio tensor comes later.
+        for (let i = 0; i < inV.len; i++) {
+            const idx = i32(inV.base + i * 4);
+            if (idx < 0 || idx >= tVec.len) continue;
+            const tens = deref(tVec.base + idx * 4);
+            if (tensorLastDim(tens) !== NMELS) continue;
+            const q = readTensorQuant(tens);
+            if (q) return q;
+        }
+
+        // Pass 2: any input with valid quant (fallback for exotic shapes).
+        for (let i = 0; i < inV.len; i++) {
+            const idx = i32(inV.base + i * 4);
+            if (idx < 0 || idx >= tVec.len) continue;
+            const tens = deref(tVec.base + idx * 4);
+            const q = readTensorQuant(tens);
+            if (q) return q;
+        }
+
+        return null;
+    } catch(e) {
+        console.warn('[parseTFLiteInputQuant] parse error:', e);
+        return null;
+    }
+}
+
+// Parse output tensor type from TFLite FlatBuffer.
+// Returns a string like "INT8", "UINT8", "FLOAT32", or null.
+function parseTFLiteOutputType(ab) {
+    const TTYPE = {0:'FLOAT32',1:'FLOAT16',2:'INT32',3:'UINT8',4:'INT64',9:'INT8'};
+    try {
+        const { u32, i32, u8, fld, deref, vec } = _makeFbHelpers(ab);
+        const modelRoot = u32(0);
+        const sgFld = fld(modelRoot, 2); if (!sgFld) return null;
+        const sg    = vec(sgFld);        if (sg.len === 0) return null;
+        const sg0   = deref(sg.base);
+        const outFld = fld(sg0, 2); if (!outFld) return null;  // SubGraph.outputs = field 2
+        const outV   = vec(outFld); if (outV.len === 0) return null;
+        const outIdx = i32(outV.base);
+        const tFld   = fld(sg0, 0); if (!tFld) return null;
+        const tVec   = vec(tFld);   if (outIdx >= tVec.len) return null;
+        const tens   = deref(tVec.base + outIdx * 4);
+        const typFld = fld(tens, 1); if (!typFld) return null; // Tensor.type = field 1
+        return TTYPE[u8(typFld)] ?? `type=${u8(typFld)}`;
+    } catch(e) {
+        return null;
+    }
+}
+
+// ── IndexedDB ─────────────────────────────────────────────────────────────────
+// Stores: 'prefs' (key→value), 'models' (filename→ArrayBuffer).
+function _idb(fn) {
+    return new Promise((res, rej) => {
+        const req = indexedDB.open('wakeWordTester', 2);
+        req.onupgradeneeded = e => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('prefs'))  db.createObjectStore('prefs');
+            if (!db.objectStoreNames.contains('models')) db.createObjectStore('models');
+        };
+        req.onsuccess = e => { try { fn(e.target.result, res, rej); } catch(err) { rej(err); } };
+        req.onerror = () => rej(req.error);
+    });
+}
+function prefGet(key, def)    { return _idb((db,res) => { const r=db.transaction('prefs').objectStore('prefs').get(key); r.onsuccess=()=>res(r.result??def); r.onerror=()=>res(def); }).catch(()=>def); }
+function prefSet(key, val)    { return _idb((db,res) => { const tx=db.transaction('prefs','readwrite'); tx.objectStore('prefs').put(val,key); tx.oncomplete=()=>res(); }); }
+function modelGet(name)       { return _idb((db,res) => { const r=db.transaction('models').objectStore('models').get(name); r.onsuccess=()=>res(r.result??null); r.onerror=()=>res(null); }).catch(()=>null); }
+function modelPut(name, ab)   { return _idb((db,res) => { const tx=db.transaction('models','readwrite'); tx.objectStore('models').put(ab,name); tx.oncomplete=()=>res(); }); }
+function modelDel(name)       { return _idb((db,res) => { const tx=db.transaction('models','readwrite'); tx.objectStore('models').delete(name); tx.oncomplete=()=>res(); }); }
+function modelKeys()          { return _idb((db,res) => { const r=db.transaction('models').objectStore('models').getAllKeys(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>res([]); }).catch(()=>[]); }
+
+function saveTab(tab) { return prefSet('activeTab', tab); }
+function loadTab()    { return prefGet('activeTab', 'mic'); }
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchRightTab(tabId) {
+    document.querySelectorAll('#section-tabs .tab-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tabId));
+    ['mic', 'wav', 'dir'].forEach(id =>
+        document.getElementById('section-' + id).style.display = id === tabId ? '' : 'none');
+    saveTab(tabId);
+}
+
+// ESP32 exact-quant toggle: switch the active quantizer to the firmware's fixed
+// 256/666 formula and back. Persisted across reloads.
+const esp32Checkbox = document.getElementById('esp32-mode');
+esp32Checkbox.onchange = () => {
+    esp32Mode = esp32Checkbox.checked;
+    applyQuantMode();
+    prefSet('esp32Mode', esp32Mode);
 };
+
+// Restore tab + last model on load.
+loadTab().then(tab => switchRightTab(tab));
+(async () => {
+    esp32Mode = await prefGet('esp32Mode', false);
+    esp32Checkbox.checked = esp32Mode;
+    applyQuantMode();
+    await renderModelList();
+    const last = await prefGet('lastModel', null);
+    if (last) { const ab = await modelGet(last); if (ab) await loadModelBytes(last, ab); }
+})();
+
+// ════════════════════════════════════════════════════════════════════
+// 1. MODEL LIBRARY
+// ════════════════════════════════════════════════════════════════════
+let currentModelName = null;
+
+async function loadModelBytes(name, ab) {
+    const out = document.getElementById('out-model');
+    out.textContent = 'Loading…';
+    try {
+        model = await tflite.loadTFLiteModel(ab);
+
+        const iq  = parseTFLiteInputQuant(ab);
+        const oty = parseTFLiteOutputType(ab);
+        if (iq) { modelQuantScale = 1.0 / (25.6 * iq.scale); modelQuantZp = iq.zp; }
+        else     { modelQuantScale = 1.0; modelQuantZp = -128; }
+        applyQuantMode();   // sets active quantScale/quantZp (respects ESP32 toggle)
+        // TFLite.js dequantizes UINT8 output tensors to float [0,1] internally;
+        // for INT8/other types it returns the raw quantized integer.
+        OUT_SCALE = (oty === 'UINT8') ? 1.0 : 1.0 / 256.0;
+        inferOneFrame._count    = 0;
+        inferOneFrame._errOnce  = false;
+        inferBuf = null;
+
+        currentModelName = name;
+        await prefSet('lastModel', name);
+
+        out.textContent =
+            model.inputs.map(t  => `in:  ${t.name} ${JSON.stringify(t.shape)} ${t.dtype}`).join('\n') + '\n' +
+            model.outputs.map(t => `out: ${t.name} ${JSON.stringify(t.shape)} ${t.dtype}`).join('\n') +
+            (oty ? `  [${oty}]` : '') + '\n' +
+            (iq ? `quant: scale=${iq.scale.toExponential(3)} zp=${iq.zp} → qs=${quantScale.toFixed(4)}`
+                : `quant: not found — using qs=1.0 zp=-128`) + '\n' +
+            `out_scale: ${OUT_SCALE} (${oty ?? 'unknown'} output)`;
+
+        const tabs = document.getElementById('section-tabs');
+        tabs.classList.remove('locked'); tabs.classList.add('unlocked');
+        const badge = document.getElementById('model-badge');
+        badge.textContent = name.replace(/\.tflite$/i, '');
+        badge.className = 'badge loaded';
+        document.getElementById('btn-mic-start').disabled = false;
+        document.getElementById('btn-test').disabled = !document.getElementById('audio-file').files.length;
+        document.getElementById('btn-scan').disabled = !document.getElementById('dir-input').files.length;
+
+        renderModelList();
+    } catch(err) { out.textContent = 'ERROR: ' + err; console.error(err); }
+}
+
+async function renderModelList() {
+    const keys   = (await modelKeys()).sort();
+    const list   = document.getElementById('model-list');
+    const cursor = cursorModelName ?? currentModelName;
+    list.innerHTML = '';
+    keys.forEach(name => {
+        const short = name.replace(/\.tflite$/i, '');
+        const row   = document.createElement('div');
+        row.className = 'model-row' +
+            (name === currentModelName ? ' active'  : '') +
+            (name === cursor           ? ' focused' : '');
+        row.dataset.name = name;
+        row.onclick = () => { cursorModelName = null; switchModel(name); };
+
+        const lbl = document.createElement('span');
+        lbl.className   = 'mname';
+        lbl.textContent = short;
+
+        const del = document.createElement('button');
+        del.className   = 'del';
+        del.title       = 'Remove';
+        del.textContent = '✕';
+        del.onclick = e => { e.stopPropagation(); deleteModel(name); };
+
+        row.appendChild(lbl);
+        row.appendChild(del);
+        list.appendChild(row);
+    });
+}
+
+document.addEventListener('keydown', async e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    const keys = (await modelKeys()).sort();
+    if (!keys.length) return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        const base = cursorModelName ?? currentModelName;
+        const idx  = base ? keys.indexOf(base) : -1;
+        cursorModelName = e.key === 'ArrowDown'
+            ? keys[(idx + 1) % keys.length]
+            : keys[(idx - 1 + keys.length) % keys.length];
+        renderModelList();
+        document.querySelector(`[data-name="${CSS.escape(cursorModelName)}"]`)
+                ?.scrollIntoView({ block: 'nearest' });
+    } else if (cursorModelName) {
+        await switchModel(cursorModelName);
+        cursorModelName = null;
+        renderModelList();
+    }
+});
+
+async function switchModel(name) {
+    const ab = await modelGet(name);
+    if (ab) await loadModelBytes(name, ab);
+}
+
+// Keyboard model navigation: ↑/↓ move cursor, Enter/Space loads highlighted model.
+let cursorModelName = null;
+
+async function deleteModel(name) {
+    await modelDel(name);
+    if (currentModelName === name) {
+        currentModelName = null; model = null;
+        document.getElementById('out-model').textContent = 'Add a .tflite file.';
+        const badge = document.getElementById('model-badge');
+        badge.textContent = 'none'; badge.className = 'badge unloaded';
+        const tabs = document.getElementById('section-tabs');
+        tabs.classList.remove('unlocked'); tabs.classList.add('locked');
+        await prefSet('lastModel', null);
+    }
+    renderModelList();
+}
+
+document.getElementById('model-file').onchange = async e => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    e.target.value = '';  // reset so same files can be re-added
+    let lastFile = null, lastAb = null;
+    for (const file of files) {
+        const ab = await file.arrayBuffer();
+        await modelPut(file.name, ab);
+        lastFile = file.name; lastAb = ab;
+    }
+    await renderModelList();
+    // Auto-load only when adding a single file; with multiple, just store them all.
+    if (files.length === 1) await loadModelBytes(lastFile, lastAb);
+};
+
+// ════════════════════════════════════════════════════════════════════
+// AUDIO PLAYBACK
+// ════════════════════════════════════════════════════════════════════
+let _playAudio = null;
+let _playBtn   = null;
+
+function _stopPlayback() {
+    if (_playAudio) { _playAudio.pause(); _playAudio.src = ''; _playAudio = null; }
+    if (_playBtn)   { _playBtn.textContent = _playBtn.id === 'btn-play-wav' ? '▶ Play' : '▶';
+                      _playBtn.classList.remove('playing'); _playBtn = null; }
+}
+
+function playFile(file, btn) {
+    if (_playBtn === btn) { _stopPlayback(); return; }
+    _stopPlayback();
+    const url   = URL.createObjectURL(file);
+    const audio = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); _stopPlayback(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); _stopPlayback(); };
+    audio.play();
+    _playAudio = audio;
+    _playBtn   = btn;
+    btn.textContent = btn.id === 'btn-play-wav' ? '■ Stop' : '■';
+    btn.classList.add('playing');
+}
 
 // ════════════════════════════════════════════════════════════════════
 // 2. SINGLE WAV
 // ════════════════════════════════════════════════════════════════════
-document.getElementById('audio-file').onchange = e =>
-    document.getElementById('btn-test').disabled = !(model && e.target.files.length);
+document.getElementById('audio-file').onchange = e => {
+    const f = e.target.files[0];
+    _stopPlayback();
+    document.getElementById('audio-file-name').textContent = f ? f.name : '';
+    document.getElementById('btn-test').disabled = !(model && f);
+    document.getElementById('btn-play-wav').disabled = !f;
+};
 
 document.getElementById('btn-test').onclick = async () => {
-    const out=document.getElementById('out-test');
-    out.textContent='Processing…';
+    const out        = document.getElementById('out-test');
+    const specCanvas = document.getElementById('wav-spec');
+    out.textContent = 'Processing…';
+    specCanvas.style.display = 'none';
     try {
-        const audio  = await loadWav(await document.getElementById('audio-file').files[0].arrayBuffer());
-        const frames = melSpectrogram(audio);
-        const scores = runInference(frames);
-        const maxScore=Math.max(...scores), maxIdx=scores.indexOf(maxScore);
-        out.textContent =
-            `Duration: ${(audio.length/SR).toFixed(2)}s  Frames: ${frames.length}\n`+
-            `Peak score: ${maxScore.toFixed(4)} at ${(maxIdx*STEP/SR).toFixed(2)}s  `+
-            `(${maxScore>0.5?'DETECTED ***':'not detected'})`+
-            timeline(scores);
-    } catch(err) { out.textContent='ERROR: '+err; }
+        if (!Module) throw new Error('WASM not ready — reload the page or serve via HTTP, not file://');
+        const audio = await loadWav(await document.getElementById('audio-file').files[0].arrayBuffer());
+        const res   = runFrontend(audio);
+        if (!res) throw new Error('MicroFrontend failed');
+        const { raw, T } = res;
+        drawSpectrogram(specCanvas, raw, T);
+        const { scores, peakRaw } = runInference(raw, T);
+
+        const maxScore = scores.length ? Math.max.apply(null, scores) : 0;
+        const maxIdx   = scores.indexOf(maxScore);
+        const thr      = parseFloat(thrSlider.value);
+        const det      = maxScore >= thr;
+        const hdrColor = det ? '#fa3' : '#eee';
+        const rawInfo  = peakRaw !== null
+            ? `  raw_out: ${Math.abs(peakRaw) < 0.0001 ? peakRaw.toExponential(3) : peakRaw.toPrecision(5)} × ${OUT_SCALE.toFixed(6)} = ${(peakRaw*OUT_SCALE).toPrecision(4)}`
+            : '';
+        const hdr      = `Duration: ${(audio.length/SR).toFixed(2)}s  Frames: ${T}${rawInfo}\n` +
+            `Peak: ${maxScore.toFixed(4)} at ${(maxIdx*STEP/SR).toFixed(3)}s` +
+            `  <span style="color:${hdrColor}">${det ? '✓ DETECTED' : '✗ not detected'}</span>`;
+        out.innerHTML = `<div style="white-space:pre-wrap;margin-bottom:4px">${hdr}</div>` +
+                        timelineHtml(scores, thr);
+    } catch(err) { out.textContent = 'ERROR: ' + err; }
+};
+
+document.getElementById('btn-play-wav').onclick = () => {
+    const f = document.getElementById('audio-file').files[0];
+    if (f) playFile(f, document.getElementById('btn-play-wav'));
 };
 
 // ════════════════════════════════════════════════════════════════════
 // 3. DIRECTORY SCAN
 // ════════════════════════════════════════════════════════════════════
-document.getElementById('dir-input').onchange = e =>
-    document.getElementById('btn-scan').disabled = !(model && e.target.files.length);
+document.getElementById('dir-input').onchange = e => {
+    const n = e.target.files.length;
+    document.getElementById('dir-input-name').textContent = n ? `${n} files` : '';
+    document.getElementById('btn-scan').disabled = !(model && n);
+};
 
 document.getElementById('btn-scan').onclick = async () => {
+    if (!Module) { alert('WASM not ready — wait a moment and try again.'); return; }
     const files = Array.from(document.getElementById('dir-input').files)
         .filter(f => f.name.toLowerCase().endsWith('.wav'))
-        .sort((a,b) => a.name.localeCompare(b.name));
+        .sort((a, b) => a.name.localeCompare(b.name));
     if (!files.length) return;
-    const tbody=document.getElementById('dir-tbody'), prog=document.getElementById('dir-progress');
-    const summary=document.getElementById('dir-summary');
-    tbody.innerHTML=''; document.getElementById('dir-table').style.display='table'; summary.textContent='';
-    let detected=0;
-    for (let i=0; i<files.length; i++) {
-        prog.textContent=`${i+1} / ${files.length}  —  ${files[i].name}`;
+    const tbody   = document.getElementById('dir-tbody');
+    const prog    = document.getElementById('dir-progress');
+    const summary = document.getElementById('dir-summary');
+    tbody.innerHTML = '';
+    document.getElementById('dir-table').style.display = 'table';
+    summary.textContent = '';
+    let detected = 0;
+    for (let i = 0; i < files.length; i++) {
+        prog.textContent = `${i+1} / ${files.length}  —  ${files[i].name}`;
         try {
-            const audio  = await loadWav(await files[i].arrayBuffer());
-            const frames = melSpectrogram(audio);
-            const scores = runInference(frames);
-            const maxScore=Math.max(...scores), maxIdx=scores.indexOf(maxScore);
-            const det = maxScore>0.5;
+            const audio = await loadWav(await files[i].arrayBuffer());
+            const res   = runFrontend(audio);
+            if (!res) throw new Error('Frontend (WASM MicroFrontend) returned null');
+            const { raw, T } = res;
+            const { scores } = runInference(raw, T);
+            const maxScore = scores.length ? Math.max.apply(null, scores) : 0;
+            const maxIdx   = scores.indexOf(maxScore);
+            const thr      = parseFloat(thrSlider.value);
+            const det      = maxScore >= thr;
             if (det) detected++;
-            const row=tbody.insertRow();
-            if (det) row.className='hit';
-            row.innerHTML=`<td>${files[i].name}</td>`+
-                `<td style="color:${det?'#6f6':'#888'}">${maxScore.toFixed(3)}</td>`+
-                `<td>${det?'✓':'✗'}</td>`+
-                `<td>${(maxIdx*STEP/SR).toFixed(2)}s</td>`;
+            const row = tbody.insertRow();
+            if (det) row.className = 'hit';
+            row.innerHTML =
+                `<td>${files[i].name}</td>` +
+                `<td style="color:${det?'#6f6':'#888'}">${maxScore.toFixed(3)}</td>` +
+                `<td>${det ? '✓' : '✗'}</td>` +
+                `<td>${(maxIdx*STEP/SR).toFixed(3)}s</td>`;
+            const pb = document.createElement('button');
+            pb.className = 'play-btn'; pb.textContent = '▶';
+            const _f = files[i];
+            pb.onclick = () => playFile(_f, pb);
+            row.insertCell().appendChild(pb);
         } catch(err) {
-            tbody.insertRow().innerHTML=`<td>${files[i].name}</td><td colspan="3" style="color:#a33">ERROR</td>`;
+            console.error('Scan error [' + files[i].name + ']:', err);
+            const errRow = tbody.insertRow();
+            errRow.innerHTML =
+                `<td>${files[i].name}</td>` +
+                `<td colspan="3" style="color:#a33">ERROR: ${err.message || err}</td>`;
+            const pb = document.createElement('button');
+            pb.className = 'play-btn'; pb.textContent = '▶';
+            const _f = files[i];
+            pb.onclick = () => playFile(_f, pb);
+            errRow.insertCell().appendChild(pb);
         }
-        await new Promise(r=>setTimeout(r,0));
+        await new Promise(r => setTimeout(r, 0));
     }
-    prog.textContent='';
-    summary.textContent=`${detected} / ${files.length} detected  (${(detected/files.length*100).toFixed(0)}%)`;
+    prog.textContent = '';
+    summary.textContent = `${detected} / ${files.length} detected  (${(detected/files.length*100).toFixed(0)}%)`;
 };
 
 // ════════════════════════════════════════════════════════════════════
-// 4. LIVE MIC  — streaming, frame-by-frame like the ESP32
+// 4. LIVE MIC — streaming, 10 ms/frame, matches ESP32 pipeline exactly
 // ════════════════════════════════════════════════════════════════════
 const thrSlider = document.getElementById('thr');
 thrSlider.oninput = () =>
     document.getElementById('thr-val').textContent = parseFloat(thrSlider.value).toFixed(2);
 
-// Persistent streaming state (reset on Start)
-let micCtx=null, micRunning=false;
-let micAudioWin   = new Float32Array(WIN);   // 480-sample sliding window
-let micNoise      = new Float32Array(NMELS); // PCAN noise estimate
-let micF0=null, micF1=null, micF2=null;      // last 3 spectrogram frames
-let micScoreBuf   = [0,0,0,0,0];             // 5-frame score smoothing
-let micCooldown   = 0;                       // frames remaining in cooldown
-let micLeftover   = new Float32Array(0);     // audio samples between callbacks
+let micCtx     = null;
+let micRunning = false;
+let micFE      = null;   // WASM Frontend instance
+let micFeatPtr = null;   // pre-allocated 40-byte feature buffer in WASM heap
+let micScoreBuf = new Array(5).fill(0);   // 5-frame peak window (50 ms)
+let micCooldown = 0;
+let micLeftover = new Float32Array(0);
 
-const COOLDOWN_FRAMES = 100;  // ~2s at 20ms/frame before re-triggering
+// 200 frames × 10 ms = 2 s cooldown between detections
+const COOLDOWN_FRAMES = 200;
 
 function micReset() {
-    micAudioWin.fill(0);
-    micNoise.fill(1e-3);
-    micF0=null; micF1=null; micF2=null;
-    micScoreBuf = [0,0,0,0,0];
+    micScoreBuf = new Array(5).fill(0);
     micCooldown = 0;
     micLeftover = new Float32Array(0);
+    inferBuf    = null;   // flush rolling window so new session starts silent
+    initMicSpec();
 }
 
-function processStep(step320) {
-    // Slide audio window forward by one step
-    micAudioWin.copyWithin(0, STEP);
-    micAudioWin.set(step320, WIN-STEP);
+// Feed one STEP-sample chunk through the WASM frontend.
+// Returns { raw: Uint8Array(40), quantized: Int32Array(40) } or null if no frame yet.
+function micProcessStep(chunk) {
+    if (!Module || !micFE) return null;
+    const int16 = new Int16Array(chunk.length);
+    for (let i = 0; i < chunk.length; i++)
+        int16[i] = Math.max(-32768, Math.min(32767, Math.round(chunk[i] * 32767)));
+    const pcmPtr  = Module._malloc(int16.byteLength);
+    Module.HEAPU8.set(new Uint8Array(int16.buffer), pcmPtr);
+    const nFrames = Module.ccall('frontend_process', 'number',
+        ['number', 'number', 'number', 'number'],
+        [micFE, pcmPtr, int16.length, micFeatPtr]);
+    Module._free(pcmPtr);
+    if (nFrames === 0) return null;
+    const raw      = new Uint16Array(NMELS);
+    const quantized = new Int32Array(NMELS);
+    const base = micFeatPtr >> 1;  // HEAPU16 is indexed in 16-bit words
+    for (let i = 0; i < NMELS; i++) {
+        const u16 = Module.HEAPU16[base + i];
+        raw[i]      = u16;
+        quantized[i] = Math.max(-128, Math.min(127, Math.round(u16 * quantScale) + quantZp));
+    }
+    return { raw, quantized };
+}
 
-    // Compute mel frame + PCAN
-    const raw  = computeMelFrame(micAudioWin);
-    const frame = applyPcanFrame(raw, micNoise);
+function micOnFrame({ raw, quantized }) {
+    appendSpecFrame(raw);
 
-    // Shift frame deque
-    micF0=micF1; micF1=micF2; micF2=frame;
-    if (!micF0) return null;
-
-    // Inference
-    const raw_score = inferThreeFrames(micF0, micF1, micF2);
-
-    // Smooth
-    micScoreBuf.shift(); micScoreBuf.push(raw_score);
-    return micScoreBuf.reduce((a,b)=>a+b) / micScoreBuf.length;
+    const score = inferOneFrame(quantized);
+    micScoreBuf.shift(); micScoreBuf.push(score);
+    return Math.max(...micScoreBuf);
 }
 
 function updateMicUI(score) {
     if (score === null) return;
-    const thr  = parseFloat(thrSlider.value);
-    const pct  = Math.min(100, score*100);
-    const bar  = document.getElementById('mic-bar');
-    const panel= document.getElementById('mic-panel');
+    const thr   = parseFloat(thrSlider.value);
+    const bar   = document.getElementById('mic-bar');
+    const panel = document.getElementById('mic-panel');
     document.getElementById('mic-score').textContent = score.toFixed(4);
-    bar.style.width = pct.toFixed(1)+'%';
-    bar.className   = 'bar'+(score>=thr?' hit':'');
+    bar.style.width = Math.min(100, score*100).toFixed(1) + '%';
+    bar.className   = 'bar' + (score >= thr ? ' hit' : '');
 
     if (score >= thr && micCooldown === 0) {
         micCooldown = COOLDOWN_FRAMES;
         const ts = new Date().toLocaleTimeString();
         document.getElementById('mic-detected').textContent = `DETECTED  ${ts}  (${score.toFixed(3)})`;
-        // flash panel
-        panel.classList.remove('flash');
-        void panel.offsetWidth;  // force reflow to restart animation
+        panel.classList.remove('flash'); void panel.offsetWidth;
         panel.classList.add('flash');
-        setTimeout(()=>panel.classList.remove('flash'), 600);
-        // beep
+        setTimeout(() => panel.classList.remove('flash'), 600);
         playBeep();
-        // log
-        const log=document.getElementById('mic-log');
-        const el=document.createElement('div');
-        el.className='entry hit'; el.textContent=`${ts}  score=${score.toFixed(4)}`;
+        const log = document.getElementById('mic-log');
+        const el  = document.createElement('div');
+        el.className = 'entry hit';
+        el.textContent = `${ts}  score=${score.toFixed(4)}`;
         log.insertBefore(el, log.firstChild);
-        while(log.children.length>20) log.removeChild(log.lastChild);
-    } else if (score < thr*0.6) {
-        document.getElementById('mic-detected').textContent='';
+        while (log.children.length > 20) log.removeChild(log.lastChild);
+    } else if (score < thr * 0.6) {
+        document.getElementById('mic-detected').textContent = '';
     }
-    if (micCooldown>0) micCooldown--;
+    if (micCooldown > 0) micCooldown--;
 }
 
 const WORKLET_SRC = `
@@ -515,12 +1136,16 @@ registerProcessor('mic-processor', MicProcessor);
 
 document.getElementById('btn-mic-start').onclick = async () => {
     if (!model) return;
+    if (!Module) { alert('WASM not ready — wait a moment and try again.'); return; }
+
     micReset();
-    const stream = await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    micFE      = Module._frontend_create();
+    micFeatPtr = Module._malloc(NMELS * 2);  // uint16: 2 bytes per feature
+
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
     micCtx = new AudioContext({sampleRate: SR});
 
-    // Load worklet from a blob URL (keeps everything in one HTML file)
-    const blob = new Blob([WORKLET_SRC], {type: 'application/javascript'});
+    const blob   = new Blob([WORKLET_SRC], {type: 'application/javascript'});
     const blobUrl = URL.createObjectURL(blob);
     await micCtx.audioWorklet.addModule(blobUrl);
     URL.revokeObjectURL(blobUrl);
@@ -528,39 +1153,43 @@ document.getElementById('btn-mic-start').onclick = async () => {
     const src    = micCtx.createMediaStreamSource(stream);
     const worklet = new AudioWorkletNode(micCtx, 'mic-processor');
 
-    // Fix canvas pixel resolution to its actual display size
     micWaveCanvas.width  = micWaveCanvas.offsetWidth;
     micWaveCanvas.height = micWaveCanvas.offsetHeight;
 
-    // AudioWorklet delivers 128-sample blocks; accumulate into STEP-sized chunks
+    // AudioWorklet delivers 128-sample blocks; accumulate into STEP-sized (160) chunks
     worklet.port.onmessage = e => {
         if (!micRunning) return;
-        drawWaveform(e.data);  // update waveform on every 128-sample block
+        drawWaveform(e.data);
+
         const tmp = new Float32Array(micLeftover.length + e.data.length);
         tmp.set(micLeftover); tmp.set(e.data, micLeftover.length);
         micLeftover = tmp;
 
         while (micLeftover.length >= STEP) {
-            const score = processStep(micLeftover.subarray(0, STEP));
-            updateMicUI(score);
+            try {
+                const frame = micProcessStep(micLeftover.subarray(0, STEP));
+                if (frame) updateMicUI(micOnFrame(frame));
+            } catch(e) { console.error('[mic] frame error:', e); }
             micLeftover = micLeftover.slice(STEP);
         }
     };
 
     src.connect(worklet);
-    micRunning=true;
-    document.getElementById('btn-mic-start').disabled=true;
-    document.getElementById('btn-mic-stop').disabled=false;
+    micRunning = true;
+    document.getElementById('btn-mic-start').disabled = true;
+    document.getElementById('btn-mic-stop').disabled  = false;
 };
 
 document.getElementById('btn-mic-stop').onclick = () => {
-    micRunning=false;
-    if (micCtx) { micCtx.close(); micCtx=null; }
-    document.getElementById('btn-mic-start').disabled=false;
-    document.getElementById('btn-mic-stop').disabled=true;
-    document.getElementById('mic-score').textContent='—';
-    document.getElementById('mic-bar').style.width='0%';
-    document.getElementById('mic-detected').textContent='';
+    micRunning = false;
+    if (micCtx) { micCtx.close(); micCtx = null; }
+    if (Module && micFE)      { Module._frontend_destroy(micFE); micFE = null; }
+    if (Module && micFeatPtr) { Module._free(micFeatPtr); micFeatPtr = null; }
+    document.getElementById('btn-mic-stop').disabled  = true;
+    document.getElementById('btn-mic-start').disabled = false;
+    document.getElementById('mic-score').textContent  = '—';
+    document.getElementById('mic-bar').style.width    = '0%';
+    document.getElementById('mic-detected').textContent = '';
 };
 </script>
 </body>
