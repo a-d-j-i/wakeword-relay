@@ -423,18 +423,22 @@ function quantizeFrames(raw, T) {
     return q;
 }
 
-// Rolling window buffer for sliding-window models (shape [1,N,40] where N>1).
-// Reset when a new model is loaded or mic starts.
-let inferBuf = null;
+// Frame accumulator for streaming-internal models with input shape [1,T,40], T>1.
+// These ingest T NEW frames per invocation and keep history in internal ring buffers
+// — so we feed non-overlapping T-frame chunks, NOT a sliding window. Reset on model
+// load / mic start.
+let inferBuf  = null;
+let inferFill = 0;   // # of new frames accumulated into inferBuf so far
 
 function resetInferBuf() {
     if (!model) return;
     const T = model.inputs[0].shape[1];
-    inferBuf = new Int32Array(T * NMELS);  // zero-filled = silence padding
+    inferBuf  = new Int32Array(T * NMELS);  // zero-filled = silence padding
+    inferFill = 0;
 }
 
 // Feed one frame (Int32Array(40)) through the model.
-// Handles both streaming [1,1,40] and sliding-window [1,N,40] models.
+// Handles both per-frame streaming [1,1,40] and stride-T streaming [1,T,40] models.
 function inferOneFrame(q) {
     const T   = model.inputs[0].shape[1];
     let   buf;
@@ -443,9 +447,14 @@ function inferOneFrame(q) {
         buf = new Int32Array(NMELS);
         buf.set(q.subarray(0, NMELS));
     } else {
+        // Accumulate T new frames, then predict once. The model's internal state
+        // carries history across calls; feeding an overlapping sliding window every
+        // frame advances that state T× too fast and pins the output near 0.
         if (!inferBuf || inferBuf.length !== T * NMELS) resetInferBuf();
-        inferBuf.copyWithin(0, NMELS);               // shift left by one frame
-        inferBuf.set(q.subarray(0, NMELS), (T-1) * NMELS); // append new frame
+        inferBuf.set(q.subarray(0, NMELS), inferFill * NMELS);
+        inferFill++;
+        if (inferFill < T) return inferOneFrame._lastScore || 0;  // wait for a full chunk
+        inferFill = 0;
         buf = inferBuf;
     }
 
@@ -471,16 +480,16 @@ function inferOneFrame(q) {
         }
     }
     inp.dispose();
+    inferOneFrame._lastScore = s;
     return s;
 }
 
-// Frame-by-frame inference over a WAV file (uses a local window buffer, doesn't touch inferBuf).
+// Frame-by-frame inference over a WAV file (doesn't touch the mic's inferBuf).
 // Returns { scores: number[], peakRaw: number|null } — peakRaw is the max raw model output
 // before OUT_SCALE multiplication (useful for diagnosing output quantization issues).
 function runInference(raw, T) {
     const frames = quantizeFrames(raw, T);
     const winT   = model.inputs[0].shape[1];
-    const winBuf = new Int32Array(winT * NMELS);
 
     // Streaming state tensors in TFLite.js are initialised to byte value 0.
     // For INT8 quantisation with zp=-128 that means float=+12.8 instead of 0.
@@ -497,26 +506,28 @@ function runInference(raw, T) {
     }
     const scores = [];
     let peakRaw  = null;
-    for (let i = 0; i < T; i++) {
-        const frame = frames.subarray(i * NMELS, (i+1) * NMELS);
-        if (winT === 1) {
-            scores.push(inferOneFrame(frame));
-        } else {
-            winBuf.copyWithin(0, NMELS);
-            winBuf.set(frame, (winT-1) * NMELS);
-            const inp = tf.tensor(winBuf, [1, winT, NMELS], 'int32');
+    if (winT === 1) {
+        for (let i = 0; i < T; i++)
+            scores.push(inferOneFrame(frames.subarray(i * NMELS, (i+1) * NMELS)));
+    } else {
+        // Stride-T streaming model: feed non-overlapping T-frame chunks (internal state
+        // carries history). Push the chunk's score for each of its T frames so the
+        // scores array stays frame-aligned for the timeline / peak-time display.
+        for (let i = 0; i + winT <= T; i += winT) {
+            const chunk = frames.subarray(i * NMELS, (i + winT) * NMELS);
+            const inp   = tf.tensor(chunk, [1, winT, NMELS], 'int32');
             let s = 0;
             try {
                 const out = model.predict(inp);
                 const r   = out.dataSync()[0];
                 if (peakRaw === null || r > peakRaw) peakRaw = r;
-                if (i < 5 || r > 0)
-                    console.log('[wav] frame', i, 'in[0]:', winBuf[0], 'raw_r:', r, '→', (r*OUT_SCALE).toFixed(5));
+                if (i < 15 || r > 0)
+                    console.log('[wav] chunk@frame', i, 'in[0]:', chunk[0], 'raw_r:', r, '→', (r*OUT_SCALE).toFixed(5));
                 s = r * OUT_SCALE;
                 out.dispose();
-            } catch(e) { console.warn('[wav] predict error frame', i, e); }
+            } catch(e) { console.warn('[wav] predict error chunk@frame', i, e); }
             inp.dispose();
-            scores.push(s);
+            for (let k = 0; k < winT; k++) scores.push(s);
         }
     }
     return { scores, peakRaw };
@@ -781,9 +792,10 @@ async function loadModelBytes(name, ab) {
         // TFLite.js dequantizes UINT8 output tensors to float [0,1] internally;
         // for INT8/other types it returns the raw quantized integer.
         OUT_SCALE = (oty === 'UINT8') ? 1.0 : 1.0 / 256.0;
-        inferOneFrame._count    = 0;
-        inferOneFrame._errOnce  = false;
-        inferBuf = null;
+        inferOneFrame._count     = 0;
+        inferOneFrame._errOnce   = false;
+        inferOneFrame._lastScore = 0;
+        inferBuf = null;   // forces resetInferBuf() (also clears inferFill) on next frame
 
         currentModelName = name;
         await prefSet('lastModel', name);
