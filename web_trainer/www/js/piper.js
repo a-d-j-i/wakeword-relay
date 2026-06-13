@@ -162,20 +162,26 @@ async function generateSamples(modelUrl, voiceConfig, text, lang, count, onProgr
     let nextId = 0, doneCount = 0;
 
     return new Promise((resolve, reject) => {
-        function dispatch(worker) {
-            if (nextId >= count) return;
-            const id          = nextId++;
-            const noiseScale  = 0.3  + Math.random() * 0.7;   // [0.3, 1.0]
-            const lengthScale = 0.85 + Math.random() * 0.3;   // [0.85, 1.15]
-            const noiseW      = 0.2  + Math.random() * 1.3;   // [0.2, 1.5]
-            const idsBuf      = phonemeIds.buffer.slice(0);    // copy for transfer
+        const MAX_RETRIES = 2;
+        function dispatch(worker, retryId = null, retriesLeft = MAX_RETRIES) {
+            const id = retryId !== null ? retryId : (nextId < count ? nextId++ : null);
+            if (id === null) return;
+            const noiseScale  = 0.3  + Math.random() * 0.7;
+            const lengthScale = 0.85 + Math.random() * 0.3;
+            const noiseW      = 0.2  + Math.random() * 1.3;
+            const idsBuf      = phonemeIds.buffer.slice(0);
 
             const h = ({ data }) => {
                 if (data.id !== id) return;
                 worker.removeEventListener('message', h);
                 if (data.type === 'error') {
-                    workers.forEach(w => w.terminate());
-                    reject(new Error('sample ' + id + ': ' + data.message));
+                    if (retriesLeft > 0) {
+                        console.warn(`piper: sample ${id} failed (${data.message}), retrying (${retriesLeft} left)`);
+                        dispatch(worker, id, retriesLeft - 1);
+                    } else {
+                        workers.forEach(w => w.terminate());
+                        reject(new Error('sample ' + id + ': ' + data.message));
+                    }
                     return;
                 }
                 results[id] = {

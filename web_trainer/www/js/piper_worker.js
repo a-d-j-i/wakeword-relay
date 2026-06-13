@@ -92,7 +92,7 @@ self.addEventListener('message', async ({ data }) => {
                 [wavBuf]
             );
         } catch (e) {
-            self.postMessage({ type: 'error', id, message: e.message });
+            self.postMessage({ type: 'error', id, message: e?.message ?? String(e) });
         }
     }
 });

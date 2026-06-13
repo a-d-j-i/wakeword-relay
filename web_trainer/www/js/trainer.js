@@ -6,10 +6,13 @@
 // Requires web_trainer.js to be loaded and window.webTrainerReady to be true
 // before any function is called.
 //
-// Spectrogram scale: uint8 MicroFrontend output × (1/25.6) → float32.
-// This matches the negative dataset bundle scale (negatives.js NEG_SCALE).
+// Spectrogram scale: uint16 MicroFrontend output × (1/25.6) → float32.
+// This matches the negative dataset bundle scale (negatives.js NEG_SCALE) and
+// microWakeWord (inference.py / data.py multiply the uint16 frontend output by
+// 0.0390625). The frontend output routinely exceeds 255 for speech (range ~0..670),
+// so it must be read as uint16 — reading it as bytes wraps every value > 255.
 
-const _FEAT_SCALE = 1.0 / 25.6;   // uint8 [0-255] → float32 [0 - ~10]
+const _FEAT_SCALE = 1.0 / 25.6;   // uint16 [0-~670] → float32 [0 - ~26]
 
 // Resample Float32Array from srcRate to 16 kHz via linear interpolation.
 function _resampleTo16k(samples, srcRate) {
@@ -32,8 +35,8 @@ function _resampleTo16k(samples, srcRate) {
 // Returns { spectrogram: Float32Array (T×40), T } or null if WASM not ready.
 function audioToFloat32Spec(samples, sampleRate = 16000, minFrames = 157) {
     if (!window.webTrainerReady || !window.Module) return null;
-    if (!Module.HEAPU8 || !Module.HEAPF32) {
-        console.warn('trainer: HEAPU8/HEAPF32 not exported — rebuild WASM');
+    if (!Module.HEAPU16 || !Module.HEAPF32) {
+        console.warn('trainer: HEAPU16/HEAPF32 not exported — rebuild WASM');
         return null;
     }
 
@@ -45,18 +48,23 @@ function audioToFloat32Spec(samples, sampleRate = 16000, minFrames = 157) {
 
     const fe        = Module.ccall('frontend_create', 'number', [], []);
     const maxFrames = Math.max(Math.ceil(int16.length / 160) + 10, minFrames + 1);
-    const featPtr   = Module._malloc(maxFrames * 40);
-    const pcmBytes  = new Uint8Array(int16.buffer);
+    const featPtr = Module._malloc(maxFrames * 40 * 2);  // uint16: 2 bytes per feature
 
+    // Heap-allocate PCM — ccall 'array' type uses stackAlloc, which overflows for large audio.
+    const pcmPtr = Module._malloc(int16.byteLength);
+    Module.HEAPU8.set(new Uint8Array(int16.buffer), pcmPtr);
     const T = Module.ccall('frontend_process', 'number',
-        ['number', 'array', 'number', 'number'],
-        [fe, pcmBytes, int16.length, featPtr]);
+        ['number', 'number', 'number', 'number'],
+        [fe, pcmPtr, int16.length, featPtr]);
+    Module._free(pcmPtr);
 
     Module.ccall('frontend_destroy', null, ['number'], [fe]);
 
+    window._dbgT = T;  // expose for error logging in training loop
     const actualT     = Math.max(T, minFrames);
     const spectrogram = new Float32Array(actualT * 40);
-    for (let i = 0; i < T * 40; i++) spectrogram[i] = Module.HEAPU8[featPtr + i] * _FEAT_SCALE;
+    const base = featPtr >> 1;  // HEAPU16 is indexed in 16-bit words
+    for (let i = 0; i < T * 40; i++) spectrogram[i] = Module.HEAPU16[base + i] * _FEAT_SCALE;
     // Frames beyond T are zero-padded (Float32Array initialises to 0).
 
     Module._free(featPtr);

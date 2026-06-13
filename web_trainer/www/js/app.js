@@ -720,10 +720,13 @@ trainStartBtn.addEventListener('click', async () => {
     trainProgress.max   = numSteps;
     trainLossWrap.style.display = '';
 
+    let _skipCount = 0;
     for (let step = 0; step < numSteps && !_abortFlag; step++) {
+        try {
         // Positive step
         const wav  = _posWavs[Math.floor(Math.random() * _posWavs.length)];
         const s16k = _resample(wav.samples, wav.sampleRate);
+        if (s16k.length > 80000) { console.warn(`skip overlong sample: ${s16k.length} samples`); continue; }
         const aug  = augmentSample(s16k, 16000, {
             irs:        loadedIRs || [],
             noises:     noiseParsed ? [noiseGetSample(noiseParsed)] : [],
@@ -733,6 +736,7 @@ trainStartBtn.addEventListener('click', async () => {
             noiseProb:  noiseParsed ? 0.75 : 0.0,
             gainRange:  [-45, 0],
         });
+        window._dbgAugLen = aug.length;
         const feat = audioToFloat32Spec(aug, 16000, _trainMinFrames);
         if (!feat) continue;
 
@@ -755,6 +759,11 @@ trainStartBtn.addEventListener('click', async () => {
         }
 
         _lossHistory.push((posLoss + negLossSum / negPerPos) / 2);
+        } catch (e) {
+            _skipCount++;
+            console.error(`Training step ${step} skipped (${e.message}). T=${window._dbgT}, aug.len=${window._dbgAugLen}`);
+            continue;
+        }
 
         if (step % 10 === 0) {
             trainProgress.value = step + 1;
