@@ -44,7 +44,7 @@ NEGATIVE_DATASETS = ["dinner_party.zip", "dinner_party_eval.zip", "no_speech.zip
 class Paths:
     data_dir: Path
     downloads_dir: Path
-    piper_model_path: Path
+    piper_model_paths: list[Path]
 
 
 def parse_args():
@@ -67,10 +67,11 @@ def parse_args():
                         "Shared across training runs to avoid re-downloading.")
     p.add_argument("--output_dir", default=None,
                    help="Training output directory (default: <data_dir>/trained_models/wakeword)")
-    p.add_argument("--piper_model", default=None,
-                   help="Path to a Piper TTS voice model (.onnx or .pt). "
-                        "If omitted, the default English .pt model is downloaded automatically. "
-                        "Download any voice from https://huggingface.co/rhasspy/piper-voices")
+    p.add_argument("--piper_model", default=None, nargs='+',
+                   help="Path(s) or name(s) of Piper TTS voice model(s). Repeat or space-separate "
+                        "for multiple voices — samples are split evenly across them. "
+                        "If omitted, the default English model is used. "
+                        "Voice names are downloaded automatically (e.g. es_AR-daniela-high).")
     p.add_argument("--regen_features", action="store_true",
                    help="Delete and regenerate augmented features even if they exist")
     p.add_argument("--regen_samples", action="store_true",
@@ -107,14 +108,25 @@ def resolve_piper_model(piper_model_arg: str | None, downloads_dir: Path) -> Pat
     voice_dir = downloads_dir / "piper_voices"
     voice_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = voice_dir / f"{piper_model_arg}.onnx"
-    if not onnx_path.exists():
-        print(f"[setup] Downloading Piper voice '{piper_model_arg}'...")
+    json_path  = voice_dir / f"{piper_model_arg}.onnx.json"
+
+    def _download_complete() -> bool:
+        # Both files must exist and the .onnx must be at least 1 MB (partial downloads are smaller).
+        return onnx_path.exists() and json_path.exists() and onnx_path.stat().st_size > 5_000_000
+
+    if not _download_complete():
+        if onnx_path.exists() or json_path.exists():
+            print(f"[setup] Incomplete download detected for '{piper_model_arg}', re-downloading...")
+            onnx_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
+        else:
+            print(f"[setup] Downloading Piper voice '{piper_model_arg}'...")
         subprocess.run(
             [sys.executable, "-m", "piper.download_voices",
              piper_model_arg, "--download-dir", str(voice_dir)],
             check=True,
         )
-    if not onnx_path.exists():
+    if not _download_complete():
         raise FileNotFoundError(
             f"Expected {onnx_path} after download — check that '{piper_model_arg}' is a valid voice name. "
             "Run `python -m piper.download_voices` with no arguments to list available voices."
@@ -131,36 +143,88 @@ def setup_piper(paths: Paths) -> None:
 # ---------------------------------------------------------------------------
 
 def generate_positive_samples(paths: Paths, phonetic: str, n_samples: int, regen: bool) -> Path:
-    """Generate TTS wake word samples using piper-sample-generator."""
+    """Generate TTS wake word samples from one or more Piper voices.
+
+    When multiple voices are given, samples are split evenly across them.
+    Each WAV is named {voice}_{local_index:04d}.wav (e.g. daniela-high_0000.wav)
+    so the pool is self-documenting. Generation is additive: only missing samples
+    are generated; existing extras are kept for future use.
+    """
     import shutil
 
-    out_dir = paths.data_dir / "generated_samples"
+    def short_name(model_path: Path) -> str:
+        """Strip locale prefix: 'es_AR-daniela-high' → 'daniela-high'."""
+        s = model_path.stem
+        return s[s.index('-') + 1:] if '-' in s else s
 
+    out_dir = paths.data_dir / "generated_samples"
     if regen and out_dir.exists():
         shutil.rmtree(out_dir)
 
     out_dir.mkdir(exist_ok=True)
 
-    existing = list(out_dir.glob("*.wav"))
-    if len(existing) >= n_samples:
-        print(f"[samples] {len(existing)} samples already exist, skipping generation.")
-        return out_dir
+    # Count existing samples per voice and report.
+    voice_counts: dict[str, int] = {}
+    for wav in out_dir.glob("*.wav"):
+        if '_' in wav.stem:
+            voice_counts[wav.stem.rsplit('_', 1)[0]] = voice_counts.get(
+                wav.stem.rsplit('_', 1)[0], 0) + 1
 
-    print(f"[samples] Generating {n_samples} samples for '{phonetic}'...")
+    requested_voices = [short_name(p) for p in paths.piper_model_paths]
+    total_existing   = sum(voice_counts.values())
+
+    if voice_counts:
+        print("[samples] Existing pool:")
+        for v, c in sorted(voice_counts.items()):
+            print(f"  {v}: {c}")
+        if any(v not in requested_voices for v in voice_counts):
+            extra = [v for v in voice_counts if v not in requested_voices]
+            print(f"[samples] Note: pool contains voices not in current run ({extra}). "
+                  "They are kept but won't be used for this training.")
+
+    n_per_voice = (n_samples + len(requested_voices) - 1) // len(requested_voices)
+
     env = os.environ.copy()
-    # piper_sample_generator and piper_train are vendored in _TRAIN_DIR; add it to
-    # PYTHONPATH so the subprocess finds both packages without any editable install.
     env["PYTHONPATH"] = str(_TRAIN_DIR) + (
         f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else ""
     )
-    subprocess.run([
-        sys.executable, "-m", "piper_sample_generator",
-        phonetic,
-        "--model", str(paths.piper_model_path),
-        "--max-samples", str(n_samples),
-        "--batch-size", "100",
-        "--output-dir", str(out_dir),
-    ], check=True, env=env)
+
+    generated = 0
+    for i, model_path in enumerate(paths.piper_model_paths):
+        voice    = short_name(model_path)
+        have     = voice_counts.get(voice, 0)
+        need     = max(0, n_per_voice - have)
+        if need == 0:
+            print(f"[samples] {voice}: {have} already in pool, skipping.")
+            continue
+        print(f"[samples] {voice}: {have} in pool, generating {need} more...")
+
+        tmp_dir = paths.data_dir / f"_tmp_samples_{i}"
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir()
+
+        subprocess.run([
+            sys.executable, "-m", "piper_sample_generator",
+            phonetic,
+            "--model", str(model_path),
+            "--max-samples", str(need),
+            "--batch-size", "100",
+            "--output-dir", str(tmp_dir),
+        ], check=True, env=env)
+
+        # Rename into pool as {voice}_{local_index:04d}.wav, continuing from have.
+        wav_files = sorted(tmp_dir.glob("*.wav"), key=lambda p: int(p.stem))
+        for local_idx, wav_file in enumerate(wav_files):
+            wav_file.rename(out_dir / f"{voice}_{have + local_idx:04d}.wav")
+        generated += len(wav_files)
+        shutil.rmtree(tmp_dir)
+
+    total_after = sum(
+        len(list(out_dir.glob(f"{short_name(p)}_*.wav"))) for p in paths.piper_model_paths
+    )
+    print(f"[samples] Pool: {total_after} samples across {len(requested_voices)} voice(s) "
+          f"({generated} newly generated).")
     return out_dir
 
 
@@ -296,8 +360,14 @@ def _features_complete(out_dir: Path) -> bool:
     return True
 
 
-def generate_augmented_features(paths: Paths, regen: bool) -> Path:
-    """Build augmented spectrogram RaggedMmap datasets for train/val/test splits."""
+def generate_augmented_features(paths: Paths, regen: bool, n_samples: int) -> Path:
+    """Build augmented spectrogram RaggedMmap datasets for train/val/test splits.
+
+    When the sample pool is larger than n_samples, a random balanced subset is
+    selected (equal quota per voice) so feature generation stays fast regardless
+    of pool size.
+    """
+    import random
     import shutil
 
     out_dir = paths.data_dir / "generated_augmented_features"
@@ -307,6 +377,36 @@ def generate_augmented_features(paths: Paths, regen: bool) -> Path:
             return out_dir
         shutil.rmtree(out_dir)
     out_dir.mkdir()
+
+    # Build the set of WAVs to augment: randomly sample up to n_samples,
+    # balanced across voices that appear in the pool.
+    pool_dir  = paths.data_dir / "generated_samples"
+    all_wavs  = list(pool_dir.glob("*.wav"))
+    by_voice: dict[str, list[Path]] = {}
+    for w in all_wavs:
+        voice = w.stem.rsplit('_', 1)[0] if '_' in w.stem else 'unknown'
+        by_voice.setdefault(voice, []).append(w)
+
+    voices      = sorted(by_voice)
+    quota       = (n_samples + len(voices) - 1) // len(voices) if voices else n_samples
+    selected    = []
+    for v in voices:
+        pool = by_voice[v]
+        random.shuffle(pool)
+        selected.extend(pool[:quota])
+
+    if len(selected) < len(all_wavs):
+        print(f"[features] Pool has {len(all_wavs)} samples; randomly selected {len(selected)} "
+              f"({quota} per voice) for augmentation.")
+        active_dir = paths.data_dir / "generated_samples_active"
+        if active_dir.exists():
+            shutil.rmtree(active_dir)
+        active_dir.mkdir()
+        for w in selected:
+            (active_dir / w.name).symlink_to(w.resolve())
+        samples_dir = active_dir
+    else:
+        samples_dir = pool_dir
 
     print("[features] Generating augmented spectrograms...")
 
@@ -318,7 +418,7 @@ def generate_augmented_features(paths: Paths, regen: bool) -> Path:
     # clips.py is patched to load audio with scipy.io.wavfile (not soundfile/HuggingFace),
     # avoiding the TF/libsndfile memory allocator conflict.
     clips = Clips(
-        input_directory=str(paths.data_dir / "generated_samples"),
+        input_directory=str(samples_dir),
         file_pattern="*.wav",
         max_clip_duration_s=None,
         remove_silence=False,
@@ -367,6 +467,10 @@ def generate_augmented_features(paths: Paths, regen: bool) -> Path:
             batch_size=100,
             verbose=True,
         )
+
+    if samples_dir != pool_dir:
+        shutil.rmtree(samples_dir)
+
     return out_dir
 
 
@@ -503,8 +607,8 @@ if __name__ == "__main__":
     data_dir = Path(args.data_dir)
     downloads_dir = Path(args.downloads_dir) if args.downloads_dir else data_dir
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    piper_model_path = resolve_piper_model(args.piper_model, downloads_dir)
-    paths = Paths(data_dir=data_dir, downloads_dir=downloads_dir, piper_model_path=piper_model_path)
+    piper_model_paths = [resolve_piper_model(m, downloads_dir) for m in (args.piper_model or [None])]
+    paths = Paths(data_dir=data_dir, downloads_dir=downloads_dir, piper_model_paths=piper_model_paths)
 
     if args.output_dir is None:
         args.output_dir = str(paths.data_dir / "trained_models/wakeword")
@@ -519,7 +623,7 @@ if __name__ == "__main__":
     download_fma(paths)
     download_negative_datasets(paths)
 
-    generate_augmented_features(paths, regen=args.regen_features)
+    generate_augmented_features(paths, regen=args.regen_features, n_samples=args.samples)
 
     config_path = write_training_config(
         paths, args.output_dir, args.steps, args.batch_size, args.neg_class_weight
