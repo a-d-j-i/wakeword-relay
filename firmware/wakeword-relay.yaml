@@ -31,14 +31,14 @@ logger:
 #     -- change to match your wiring. INMP441 SEL->GND = "left" channel. -----
 i2s_audio:
   - id: i2s_in
-    i2s_lrclk_pin: GPIO2   # WS / LRCL
-    i2s_bclk_pin: GPIO1    # SCK / BCLK
+    i2s_lrclk_pin: GPIO6   # WS / LRCL
+    i2s_bclk_pin: GPIO5    # SCK / BCLK
 
 microphone:
   - platform: i2s_audio
     id: mic
     i2s_audio_id: i2s_in
-    i2s_din_pin: GPIO3     # SD / DOUT from the mic
+    i2s_din_pin: GPIO7     # SD / DOUT from the mic
     adc_type: external
     pdm: false
     sample_rate: 16000     # micro_wake_word requires 16 kHz
@@ -71,6 +71,6 @@ micro_wake_word:
 switch:
   - platform: gpio
     id: relay
-    pin: GPIO5
+    pin: GPIO4
     internal: true                    # not exposed anywhere; pure local control
     restore_mode: ALWAYS_OFF          # deterministic OFF at every boot, then toggle on detection
