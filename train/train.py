@@ -18,6 +18,7 @@ Notes:
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -76,6 +77,11 @@ def parse_args():
                    help="Delete and regenerate augmented features even if they exist")
     p.add_argument("--regen_samples", action="store_true",
                    help="Delete and regenerate TTS positive samples even if they exist")
+    p.add_argument("--copy-to", dest="copy_to", default=None, metavar="PATH",
+                   help="After training, copy the final .tflite to PATH "
+                        "(e.g. ../firmware/models/turn_on.tflite)")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="Print the resolved training plan and exit — no downloads, no training")
     return p.parse_args()
 
 
@@ -516,8 +522,11 @@ def write_training_config(
         "negative_class_weight": [neg_class_weight],
         "learning_rates": [0.001],
         "batch_size": batch_size,
-        "time_mask_max_size": [0], "time_mask_count": [0],
-        "freq_mask_max_size": [0], "freq_mask_count": [0],
+        # SpecAugment: randomly zero out a few time columns + frequency rows of the
+        # spectrogram each training step. Forces the model not to over-rely on any single
+        # cue -> better generalization to real voices/mics than the few TTS speakers.
+        "time_mask_max_size": [5], "time_mask_count": [2],
+        "freq_mask_max_size": [5], "freq_mask_count": [2],
         "eval_step_interval": 500,
         "clip_duration_ms": 1500,
         "target_minimization": 0.9,
@@ -606,12 +615,30 @@ if __name__ == "__main__":
 
     data_dir = Path(args.data_dir)
     downloads_dir = Path(args.downloads_dir) if args.downloads_dir else data_dir
+    if args.output_dir is None:
+        args.output_dir = str(data_dir / "trained_models/wakeword")
+    tflite_path = (
+        Path(args.output_dir)
+        / "tflite_stream_state_internal_quant"
+        / "stream_state_internal_quant.tflite"
+    )
+
+    if args.dry_run:
+        print("DRY RUN — training plan (nothing downloaded or trained):")
+        print(f"  phrase / phonetic : {args.phrase!r} / {phonetic!r}")
+        print(f"  voices            : {args.piper_model or ['<default English>']}")
+        print(f"  samples / steps   : {args.samples} / {args.steps}")
+        print(f"  neg_class_weight  : {args.neg_class_weight}   batch_size: {args.batch_size}")
+        print(f"  data_dir          : {data_dir}")
+        print(f"  downloads_dir     : {downloads_dir}")
+        print(f"  output .tflite    : {tflite_path}")
+        if args.copy_to:
+            print(f"  copy-to           : {args.copy_to}")
+        sys.exit(0)
+
     downloads_dir.mkdir(parents=True, exist_ok=True)
     piper_model_paths = [resolve_piper_model(m, downloads_dir) for m in (args.piper_model or [None])]
     paths = Paths(data_dir=data_dir, downloads_dir=downloads_dir, piper_model_paths=piper_model_paths)
-
-    if args.output_dir is None:
-        args.output_dir = str(paths.data_dir / "trained_models/wakeword")
 
     paths.data_dir.mkdir(exist_ok=True)
 
@@ -630,11 +657,11 @@ if __name__ == "__main__":
     )
     run_training(config_path)
 
-    tflite_path = (
-        Path(args.output_dir)
-        / "tflite_stream_state_internal_quant"
-        / "stream_state_internal_quant.tflite"
-    )
     print(f"\nDone. Model: {tflite_path}")
+    if args.copy_to:
+        dest = Path(args.copy_to)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tflite_path, dest)
+        print(f"Copied -> {dest}")
     print("Write a model manifest JSON to deploy in ESPHome: https://esphome.io/components/micro_wake_word")
     print("See manifest examples: https://github.com/esphome/micro-wake-word-models/tree/main/models/v2")

@@ -1,0 +1,83 @@
+# =============================================================================
+# AI-VOX3 — buenas noches (turn_off) ONLY. Isolates the model from the
+# two-model setup, to see if it detects on its own.
+#   Play buenas_noches.wav / say it: LED green + "Detected 'turn_off'".
+#   Watch the [prob] 1s peak heartbeat (patched component) to see how high it gets.
+# Flash:  esphome run firmware/aivox3-buenas.yaml
+# =============================================================================
+
+esphome:
+  name: aivox3-buenas
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_on: { id: onboard_led, red: 100%, green: 0%, blue: 0%, transition_length: 0s }
+      - micro_wake_word.start:
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_SERIAL_JTAG
+
+i2c:
+  sda: GPIO13
+  scl: GPIO12
+  frequency: 400kHz
+  scan: true
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO10
+    i2s_mclk_pin: GPIO11
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    use_microphone: false
+    mic_gain: 24DB
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO9
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+
+micro_wake_word:
+  microphone: mic
+  stop_after_detection: false
+  models:
+    - model: ../models/turn_off.json   # buenas noches ONLY
+      probability_cutoff: 0.5
+  on_wake_word_detected:
+    then:
+      - light.turn_on: { id: onboard_led, red: 0%, green: 100%, blue: 0%, transition_length: 0s }
+      - delay: 1s
+      - light.turn_on: { id: onboard_led, red: 100%, green: 0%, blue: 0%, transition_length: 0s }
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO41
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true

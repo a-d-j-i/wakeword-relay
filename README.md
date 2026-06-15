@@ -148,3 +148,4 @@ Applied directly to the vendored source in `train/microwakeword/` to fix breakag
 | MIT RIRs loading | `streaming=True`, no `cast_column`                  | Matches notebook                                                              |
 | Progress         | No ETA                                              | Step-level ETA during training                                                |
 | Resumability     | Restarts from scratch on re-run                     | Each stage skips if output already exists                                     |
+| SpecAugment      | Disabled (`time/freq_mask = [0]`)                   | Enabled (`time_mask 5×2`, `freq_mask 5×2`) — masks spectrogram bands to regularize / generalize past the few TTS voices |

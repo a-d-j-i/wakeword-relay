@@ -1,0 +1,84 @@
+# =============================================================================
+# AI-VOX3 LIVE MIC MONITOR — continuous capture (like micro_wake_word does),
+# prints signal level ~4x/sec so you can SEE the mic feed as you speak.
+# No speaker, no wake word — just: is the continuous mic path delivering audio?
+#   rms stays ~0 while talking  -> continuous capture is broken (mww won't work)
+#   rms jumps when you talk      -> mic path is fine -> wake-word issue is elsewhere
+# Tune mic_gain (0/6/12/18/24/30/36/42 DB) and watch how rms/peak scale.
+# Flash:  esphome run firmware/aivox3-micmon.yaml
+# =============================================================================
+
+esphome:
+  name: aivox3-micmon
+  on_boot:
+    priority: -100
+    then:
+      - microphone.capture: mic        # start capturing immediately and never stop
+      - logger.log: "mic capture started - talk and watch rms/peak"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_SERIAL_JTAG
+
+i2c:
+  sda: GPIO13
+  scl: GPIO12
+  frequency: 400kHz
+  scan: true
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO10
+    i2s_mclk_pin: GPIO11
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    use_microphone: false
+    mic_gain: 12DB              # change this and re-flash to see the level scale
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO9
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+    on_data:
+      - lambda: |-
+          // Per-chunk peak/rms; throttle the log to ~4 lines/sec so it's readable.
+          int n = x.size() / 2;
+          if (n <= 0) return;
+          int16_t pk = 0; long long sumsq = 0;
+          for (size_t i = 0; i + 1 < x.size(); i += 2) {
+            int16_t s = (int16_t)(x[i] | (x[i + 1] << 8));
+            int16_t a = s < 0 ? (int16_t)(-s) : s;
+            if (a > pk) pk = a;
+            sumsq += (long long) s * s;
+          }
+          float rms = sqrtf((float) sumsq / n);
+          static uint32_t acc_pk = 0, acc_rms = 0, cnt = 0, chunks = 0;
+          acc_pk = (pk > (int)acc_pk) ? pk : acc_pk;
+          acc_rms += (uint32_t) rms; cnt++; chunks++;
+          if (chunks >= 12) {              // ~ every 12 chunks
+            ESP_LOGI("mic", "peak=%u  rms=%u  (chunk n=%d)", acc_pk, acc_rms / cnt, n);
+            acc_pk = 0; acc_rms = 0; cnt = 0; chunks = 0;
+          }

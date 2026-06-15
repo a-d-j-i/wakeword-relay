@@ -1,11 +1,29 @@
-# buenas noches → turn off 
+#!/usr/bin/env bash
+# Retrain both Spanish wake words and deploy them (SpecAugment is on in train.py).
+#   chispa magica -> firmware/models/turn_on.tflite
+#   buenas noches -> firmware/models/turn_off.tflite
+#
+# Pass ONE working dir; the dataset cache and per-phrase runs are derived under it:
+#   $WORKDIR/download            (datasets, ~10GB on first run)
+#   $WORKDIR/chispa_magica_sa    (chispa run)
+#   $WORKDIR/buenas_noches_sa    (buenas run)
+# Override on your machine, e.g.:  WORKDIR=/vms2/work_tmp ./onoff.sh
+# Preview first:  ./onoff.sh --dry-run     (passes through to both train.py calls)
+# Real run:       ./onoff.sh
+# (activate the training env first:  source venv/bin/activate)
+set -e
+cd "$(dirname "$0")"
+
+WORKDIR="${WORKDIR:-data}"        # one working dir; defaults under train/data/
+DL="$WORKDIR/download"            # shared dataset cache
+VOICES=(es_AR-daniela-high es_MX-ald-medium es_ES-carlfm-x_low)   # add more for diversity
+
+python train.py --phrase "chispa magica" --phonetic "chispa mágica" \
+  --piper_model "${VOICES[@]}" --samples 5000 --steps 45000 --neg_class_weight 15 \
+  --downloads_dir "$DL" --data_dir "$WORKDIR/chispa_magica_sa" \
+  --copy-to ../firmware/models/turn_on.tflite "$@"
+
 python train.py --phrase "buenas noches" \
---samples 3000 --steps 30000 --neg_class_weight 12  --downloads_dir /vms2/work_tmp/download --data_dir /vms2/work_tmp/buenas_noches \
---piper_model es_AR-daniela-high es_MX-ald-medium es_ES-carlfm-x_low 
-
-exit
-# chispa magica → turn on 
-python train.py --phrase "chispa magica" \
---samples 3000 --steps 30000 --neg_class_weight 12   --downloads_dir /vms2/work_tmp/download --data_dir /vms2/work_tmp/chispa_magica \
---piper_model es_AR-daniela-high es_MX-ald-medium es_ES-carlfm-x_low
-
+  --piper_model "${VOICES[@]}" --samples 5000 --steps 45000 --neg_class_weight 15 \
+  --downloads_dir "$DL" --data_dir "$WORKDIR/buenas_noches_sa" \
+  --copy-to ../firmware/models/turn_off.tflite "$@"

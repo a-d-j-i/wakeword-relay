@@ -1,0 +1,180 @@
+# =============================================================================
+# AI-VOX3 MIC + SPEAKER TEST — record while holding the button, play on release.
+#   Hold BOOT button (GPIO0): LED blue, talk into the mic (records up to ~5s).
+#   Release: LED green, plays your recording back through the speaker.
+#   - You hear your voice  -> mic AND speaker both work.
+#   - Silence on playback  -> mic not capturing (toggle es8311 use_microphone).
+#   - No sound but LED cycles -> speaker/amp issue.
+#
+# No micro_wake_word here, so nothing else touches the mic.
+# Flash:  esphome run firmware/aivox3-loopback.yaml
+# =============================================================================
+
+esphome:
+  name: aivox3-loopback
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          // ES8311 DAC must be unmuted (ESPHome's setup() doesn't do it for a bare speaker).
+          id(es8311_codec).set_mute_off();
+          id(es8311_codec).set_volume(0.9f);
+      - delay: 300ms
+      - speaker.play: !lambda 'return std::vector<uint8_t>(6400, 0);'   # prime: wake the codec so the 1st playback isn't a dead click
+      - logger.log: "codec unmuted + speaker primed"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_SERIAL_JTAG
+
+i2c:
+  sda: GPIO13
+  scl: GPIO12
+  frequency: 400kHz
+  scan: true
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO10
+    i2s_mclk_pin: GPIO11
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    use_microphone: false      # analog mic; flip to true if playback is silent
+    mic_gain: 0DB              # was 42DB (max) -> clipped at 32767. Options: 0/6/12/18/24/30/36/42 DB
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO9
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+    on_data:
+      - lambda: |-
+          // ESPHome on_data passes the captured bytes as `x` (std::vector<uint8_t>)
+          if (id(recording) && id(rec_buf).size() < 64000) {    // cap ~2s @16k/16-bit (matches reserve)
+            id(rec_buf).insert(id(rec_buf).end(), x.begin(), x.end());
+          }
+
+speaker:
+  - platform: i2s_audio
+    id: spk
+    i2s_audio_id: i2s_bus
+    i2s_dout_pin: GPIO7
+    dac_type: external
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: mono
+    buffer_duration: 3000ms     # hold up to a ~2s clip with margin
+    timeout: 3000ms             # > max clip (2s) so playback isn't cut short, but finite so the bus is RELEASED for the next record (can't use 'never' here: mic needs the bus back)
+
+globals:
+  - id: recording
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: rec_buf
+    type: std::vector<uint8_t>
+    restore_value: no
+
+binary_sensor:
+  - platform: gpio
+    id: rec_button
+    name: "Record button"
+    internal: true
+    pin:
+      number: GPIO0            # BOOT button (active-low). Alt user buttons: GPIO45 / GPIO46
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - lambda: 'id(rec_buf).clear(); id(rec_buf).reserve(64000); id(recording) = true;'   # reserve once -> no realloc -> no OOM
+      - microphone.capture: mic
+      - logger.log: "RECORDING... (talk now, release to play back)"
+    on_release:
+      - lambda: 'id(recording) = false;'
+      - microphone.stop_capture: mic
+      - delay: 1s          # let the mic release the shared I2S bus before the speaker grabs it (TX)
+      - lambda: |-
+          // min/max = dynamic range, mean = DC offset (should be near 0), rms = loudness.
+          auto &b = id(rec_buf);
+          int n = b.size() / 2;
+          int16_t mn = 32767, mx = -32768;
+          long sum = 0; long long sumsq = 0;
+          for (size_t i = 0; i + 1 < b.size(); i += 2) {
+            int16_t s = (int16_t)(b[i] | (b[i + 1] << 8));
+            if (s < mn) mn = s;
+            if (s > mx) mx = s;
+            sum += s; sumsq += (long long) s * s;
+          }
+          float mean = n ? (float) sum / n : 0.0f;
+          float rms  = n ? sqrtf((float) sumsq / n) : 0.0f;
+          ESP_LOGI("loopback", "n=%d  min=%d  max=%d  mean=%.1f(DC)  rms=%.1f  -> playing back",
+                   n, mn, mx, (double) mean, (double) rms);
+          // Re-assert DAC unmute/volume in case the mic (ADC) session left the codec changed.
+          id(es8311_codec).set_mute_off();
+          id(es8311_codec).set_volume(0.9f);
+      - speaker.play: !lambda |-
+          // Amplify ~x6 (+15 dB) so the recording is actually audible on the small speaker.
+          std::vector<uint8_t> out;
+          auto &b = id(rec_buf);
+          out.reserve(b.size());
+          for (size_t i = 0; i + 1 < b.size(); i += 2) {
+            int32_t s = (int16_t)(b[i] | (b[i + 1] << 8));
+            s *= 6;
+            if (s > 32767) s = 32767;
+            if (s < -32768) s = -32768;
+            out.push_back((uint8_t)(s & 0xFF));
+            out.push_back((uint8_t)((s >> 8) & 0xFF));
+          }
+          return out;
+
+  - platform: gpio
+    id: tone_button
+    internal: true
+    pin:
+      number: GPIO46           # MIDDLE button: play a 440 Hz test tone (speaker-only test)
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - logger.log: "TEST TONE (440 Hz) -> speaker"
+      - speaker.play: !lambda |-
+          std::vector<uint8_t> tone;
+          for (int i = 0; i < 24000; i++) {        // ~1.5 s @ 16 kHz
+            int16_t s = (int16_t)(9000.0f * sinf(2.0f * 3.14159265f * 440.0f * i / 16000.0f));
+            tone.push_back((uint8_t)(s & 0xFF));
+            tone.push_back((uint8_t)((s >> 8) & 0xFF));
+          }
+          return tone;
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO41
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true

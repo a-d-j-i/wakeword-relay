@@ -1,0 +1,84 @@
+# =============================================================================
+# AI-VOX3 BUTTON TEST — press each button, watch the LED color + serial log.
+#   GPIO0  (BOOT)  -> RED     LED, log "PRESSED GPIO0 (BOOT)"
+#   GPIO45         -> GREEN   LED, log "PRESSED GPIO45"
+#   GPIO46         -> BLUE    LED, log "PRESSED GPIO46"
+#   Release        -> LED off
+#   The 4th button is RESET (hardware): pressing it reboots the board (logs restart).
+#
+# Note which physical button gives which color, then tell me which you want as
+# the "record" button and I'll wire it into the loopback test.
+# Flash:  esphome run firmware/aivox3-buttons.yaml
+# =============================================================================
+
+esphome:
+  name: aivox3-buttons
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_SERIAL_JTAG
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO41
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true
+
+binary_sensor:
+  - platform: gpio
+    id: btn_gpio0
+    internal: true
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - logger.log: "PRESSED GPIO0 (BOOT)"
+      - light.turn_on: {id: onboard_led, red: 100%, green: 0%, blue: 0%}
+    on_release:
+      - light.turn_off: onboard_led
+
+  - platform: gpio
+    id: btn_gpio45
+    internal: true
+    pin:
+      number: GPIO45
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - logger.log: "PRESSED GPIO45"
+      - light.turn_on: {id: onboard_led, red: 0%, green: 100%, blue: 0%}
+    on_release:
+      - light.turn_off: onboard_led
+
+  - platform: gpio
+    id: btn_gpio46
+    internal: true
+    pin:
+      number: GPIO46
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - logger.log: "PRESSED GPIO46"
+      - light.turn_on: {id: onboard_led, red: 0%, green: 0%, blue: 100%}
+    on_release:
+      - light.turn_off: onboard_led
