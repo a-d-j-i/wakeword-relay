@@ -33,9 +33,12 @@ local HTTP server can serve it at /negatives.bin, or host it remotely.
 """
 
 import argparse
+import json
 import random
 import struct
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -71,7 +74,25 @@ def main():
     p.add_argument('--num_frames', type=int, default=160,
                    help='Frames per sample (must be >= 157 for MixedNet; default: 160)')
     p.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    p.add_argument('--upload', action='store_true',
+                   help='Upload the bundle to a GitHub Release after building')
+    p.add_argument('--repo', default='',
+                   help='GitHub repo (owner/name) for upload, e.g. adji/wakeword_relay')
+    p.add_argument('--tag', default='bundles',
+                   help='Release tag to create or reuse (default: bundles)')
+    p.add_argument('--token', default='',
+                   help='GitHub personal access token (or set GITHUB_TOKEN env var)')
     args = p.parse_args()
+
+    if args.upload and not args.token:
+        import os
+        args.token = os.environ.get('GITHUB_TOKEN', '')
+    if args.upload and not args.token:
+        print('ERROR: --upload requires --token or GITHUB_TOKEN env var', file=sys.stderr)
+        sys.exit(1)
+    if args.upload and not args.repo:
+        print('ERROR: --upload requires --repo owner/name', file=sys.stderr)
+        sys.exit(1)
 
     try:
         from mmap_ninja.ragged import RaggedMmap
@@ -140,6 +161,66 @@ def main():
     print(f'\nBundle written: {args.output}')
     print(f'  Size: {size / 1024 / 1024:.1f} MB')
     print(f'  Frames per sample: {f}, features: {NUM_FEATURES}')
+
+    if args.upload:
+        _github_upload(Path(args.output), args.repo, args.tag, args.token)
+
+
+def _github_api(method, url, token, body=None, content_type='application/json'):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header('Authorization', f'Bearer {token}')
+    req.add_header('Accept', 'application/vnd.github+json')
+    req.add_header('X-GitHub-Api-Version', '2022-11-28')
+    if data:
+        req.add_header('Content-Type', content_type)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f'GitHub API {method} {url} → {e.code}: {e.read().decode()}') from e
+
+
+def _github_upload(path: Path, repo: str, tag: str, token: str):
+    api = f'https://api.github.com/repos/{repo}'
+    print(f'\nUploading to GitHub release {repo}@{tag}…')
+
+    # Find or create the release
+    try:
+        release = _github_api('GET', f'{api}/releases/tags/{tag}', token)
+        print(f'  Found existing release: {release["html_url"]}')
+    except RuntimeError:
+        release = _github_api('POST', f'{api}/releases', token, {
+            'tag_name': tag,
+            'name': f'Training bundles ({tag})',
+            'body': 'Pre-built negatives and noise bundles for the web trainer.',
+            'prerelease': True,
+        })
+        print(f'  Created release: {release["html_url"]}')
+
+    # Delete existing asset with the same name (so re-runs work cleanly)
+    for asset in release.get('assets', []):
+        if asset['name'] == path.name:
+            print(f'  Replacing existing asset: {asset["name"]}')
+            _github_api('DELETE', f'{api}/releases/assets/{asset["id"]}', token)
+            break
+
+    # Upload
+    upload_url = release['upload_url'].split('{')[0]  # strip {?name,label} template
+    data = path.read_bytes()
+    req = urllib.request.Request(
+        f'{upload_url}?name={path.name}',
+        data=data, method='POST')
+    req.add_header('Authorization', f'Bearer {token}')
+    req.add_header('Accept', 'application/vnd.github+json')
+    req.add_header('Content-Type', 'application/octet-stream')
+    req.add_header('Content-Length', str(len(data)))
+    print(f'  Uploading {len(data) / 1024 / 1024:.1f} MB…', end=' ', flush=True)
+    with urllib.request.urlopen(req) as resp:
+        asset = json.loads(resp.read())
+    print('done.')
+    print(f'\n  Download URL: {asset["browser_download_url"]}')
+    print('  Paste this URL into the Train tab → Negatives → "Load from URL"')
 
 
 if __name__ == '__main__':

@@ -59,7 +59,7 @@ self.addEventListener('message', async ({ data }) => {
             const resp = await fetch(data.modelUrl);
             if (!resp.ok) throw new Error('model fetch HTTP ' + resp.status);
             _session     = await ort.InferenceSession.create(
-                await resp.arrayBuffer(), { executionProviders: ['wasm'] });
+                await resp.arrayBuffer(), { executionProviders: ['webgpu', 'wasm'] });
             _sampleRate  = data.sampleRate;
             _numSpeakers = data.numSpeakers;
             self.postMessage({ type: 'ready' });

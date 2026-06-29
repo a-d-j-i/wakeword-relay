@@ -98,7 +98,7 @@ test('Train tab shows milestone roadmap', async ({ page }) => {
     await page.click('.tab-btn[data-tab="train"]');
     await expect(page.locator('.milestone-list')).toBeVisible();
     const items = page.locator('.milestone-list li');
-    await expect(items).toHaveCount(10);
+    await expect(items).toHaveCount(12);
 });
 
 // ── Augment controls ──────────────────────────────────────────────────────────

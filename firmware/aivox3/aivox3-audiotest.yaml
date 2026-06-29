@@ -1,0 +1,153 @@
+# =============================================================================
+# AI-VOX3 GAME AUDIO-FLOW TEST (step "b" before the full frío/tibio/caliente game).
+# Goal: prove the mic <-> speaker <-> mic switch works WITH micro_wake_word in the loop.
+#   - Say "chispa mágica"  -> mww fires -> stop mww -> beep -> restart mww
+#   - Press MIDDLE button (GPIO46) -> runs the SAME cycle without speaking (deterministic)
+# PASS = after a beep, saying "chispa mágica" AGAIN still detects (mww recovered the mic).
+# FAIL = mww never detects after the first beep -> the bus didn't return to the mic.
+#
+# Key tricks borrowed from aivox3-loopback.yaml:
+#   - delay AFTER micro_wake_word.stop so the mic releases the shared I2S bus
+#   - speaker timeout is FINITE (not 'never') so the bus is returned to the mic
+#   - re-assert es8311 unmute/volume before each play (the ADC session can change it)
+# No probability tiers yet (that needs the mww patch) — this is just the audio plumbing.
+# Flash:  esphome run firmware/aivox3/aivox3-audiotest.yaml
+# =============================================================================
+
+esphome:
+  name: aivox3-audiotest
+  on_boot:
+    - priority: -100
+      then:
+        - lambda: |-
+            id(es8311_codec).set_mute_off();
+            id(es8311_codec).set_volume(0.9f);
+        - delay: 300ms
+        - speaker.play: !lambda 'return std::vector<uint8_t>(6400, 0);'   # prime the DAC
+        - light.turn_on: { id: onboard_led, red: 15%, green: 8%, blue: 0%, brightness: 30%, transition_length: 0s }
+        - micro_wake_word.start:
+        - micro_wake_word.enable_model: chispa_model
+        - logger.log: "ready - say 'chispa magica' or press GPIO46"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_SERIAL_JTAG
+
+i2c:
+  id: bus_a
+  sda: GPIO13
+  scl: GPIO12
+  frequency: 400kHz
+  scan: true
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO10
+    i2s_mclk_pin: GPIO11
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    use_microphone: false
+    mic_gain: 30DB
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO9
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+
+speaker:
+  - platform: i2s_audio
+    id: spk
+    i2s_audio_id: i2s_bus
+    i2s_dout_pin: GPIO7
+    dac_type: external
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: mono
+    buffer_duration: 3000ms
+    timeout: 3000ms          # counts from when data is QUEUED, not playback end -> must exceed the
+                             # clip length or it cuts playback to clicks. Finite so the bus still
+                             # returns to the mic (just later). 3s > our 1.2s tone, matches loopback.
+
+micro_wake_word:
+  microphone: mic
+  stop_after_detection: false
+  models:
+    - model: ../models/turn_on.json    # chispa mágica
+      id: chispa_model
+      probability_cutoff: 0.4
+      internal: true
+
+  on_wake_word_detected:
+    - logger.log: "DETECTED chispa -> running respond cycle"
+    - script.execute: respond
+
+# The respond cycle: stop listening -> free the bus -> beep -> give the bus back -> listen again.
+script:
+  - id: respond
+    mode: single             # ignore re-entry while a cycle is in progress
+    then:
+      - light.turn_on: { id: onboard_led, red: 0%, green: 0%, blue: 100%, transition_length: 0s }
+      - micro_wake_word.stop:
+      - microphone.stop_capture: mic   # mww.stop halts inference but does NOT free the I2S RX bus;
+                                       # explicitly stop the mic capture so the speaker (TX) can take it
+      - delay: 1000ms        # let the mic release the shared I2S bus before the speaker (TX) grabs it
+      - lambda: |-
+          id(es8311_codec).set_mute_off();
+          id(es8311_codec).set_volume(0.9f);
+      - speaker.play: !lambda |-
+          // ~1.2 s 660 Hz beep. Long on purpose: the bus/codec switch from RX produces a
+          // startup transient (a "click"); a short tone is ALL transient. Loopback's
+          // working tones were 1.5-2s. Shorten once it's confirmed audible.
+          std::vector<uint8_t> t;
+          for (int i = 0; i < 19200; i++) {
+            int16_t s = (int16_t)(12000.0f * sinf(2.0f * 3.14159265f * 660.0f * i / 16000.0f));
+            t.push_back((uint8_t)(s & 0xFF));
+            t.push_back((uint8_t)((s >> 8) & 0xFF));
+          }
+          return t;
+      - delay: 3200ms        # wait for the speaker timeout (3s, from queue time) to release the bus before mww grabs it back
+      - micro_wake_word.start:
+      - micro_wake_word.enable_model: chispa_model
+      - light.turn_on: { id: onboard_led, red: 15%, green: 8%, blue: 0%, brightness: 30%, transition_length: 0s }
+      - logger.log: "respond cycle done - listening again (say chispa to confirm recovery)"
+
+binary_sensor:
+  - platform: gpio
+    id: test_button
+    internal: true
+    pin: { number: GPIO46, inverted: true, mode: { input: true, pullup: true } }
+    on_press:
+      - logger.log: "BUTTON -> running respond cycle (no speech)"
+      - script.execute: respond
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO41
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true

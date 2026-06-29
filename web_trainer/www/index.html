@@ -89,11 +89,30 @@
              animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 0.4rem; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* SSL warning */
+  #ssl-warning { display: none; background: #fef3c7; border: 1px solid #f59e0b;
+                 border-radius: 6px; padding: 0.6rem 1rem; margin-bottom: 1rem;
+                 font-size: 0.84rem; color: #92400e; }
+  #ssl-warning strong { color: #78350f; }
+
   /* Negatives / noise bundle */
   #neg-progress, #noise-progress { width: 100%; margin-top: 0.5rem; }
 
   details summary { cursor: pointer; font-size: 0.82rem; color: #888; }
   details p { font-size: 0.8rem; color: #666; }
+
+  /* Preview results grid */
+  #prev-results { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.4rem; }
+  .prev-card { background: #fafafa; border: 1px solid #eee; border-radius: 4px;
+               padding: 0.5rem 0.7rem; display: flex; flex-direction: column; gap: 0.3rem; }
+  .prev-card-top { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+
+  /* Record tab */
+  #rec-timer { font-size: 0.95rem; font-family: monospace; color: #dc2626; min-width: 3rem; }
+  .rec-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem;
+              background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
+  .rec-item audio { height: 24px; flex: 1; min-width: 0; }
+  .rec-item canvas.spectrogram { width: 120px; height: 32px; flex-shrink: 0; }
 
   /* Training loop */
   .prereq-ok   { background: #dcfce7; color: #166534; }
@@ -101,10 +120,26 @@
   #train-loss-canvas { display: block; width: 100%; height: 120px;
                        border: 1px solid #ddd; border-radius: 3px; }
   #train-progress { width: 100%; margin-top: 0.5rem; }
+
+  /* Test tab */
+  #test-mic-spec { width: 100%; height: 80px; display: block;
+                   border: 1px solid #ddd; border-radius: 3px; image-rendering: pixelated; }
+  #test-mic-score { font-family: monospace; font-size: 1.1rem; min-width: 5rem; }
+  #test-mic-detected { color: #16a34a; font-weight: 600; }
+  #test-model-info { white-space: pre; font-family: monospace; font-size: 0.78rem;
+                     margin-top: 0.4rem; color: #555; }
+  #test-mic-log { max-height: 120px; overflow-y: auto; font-size: 0.8rem; margin-top: 0.5rem; }
+  #test-wav-out { white-space: pre-wrap; }
 </style>
 </head>
 <body>
 
+<div id="ssl-warning">
+  <strong>⚠ Not a secure context (no HTTPS / not localhost).</strong>
+  Some features will be unavailable: <strong>WebGPU</strong> (Piper will use WASM fallback, slower),
+  <strong>OPFS</strong> (noise bundle caching disabled), <strong>AudioWorklet</strong> (live mic on
+  the Test tab may not work). Serve via HTTPS or access as <code>localhost</code> for full functionality.
+</div>
 <h1>Wake Word Trainer</h1>
 <p class="tagline">All computation runs locally — no data leaves your machine.</p>
 
@@ -112,7 +147,10 @@
   <button class="tab-btn active" data-tab="frontend" role="tab">Frontend</button>
   <button class="tab-btn" data-tab="tts" role="tab">TTS</button>
   <button class="tab-btn" data-tab="augment" role="tab">Augment</button>
+  <button class="tab-btn" data-tab="preview" role="tab">Preview</button>
+  <button class="tab-btn" data-tab="record" role="tab">Record</button>
   <button class="tab-btn" data-tab="train" role="tab">Train <span class="badge">M7✓</span></button>
+  <button class="tab-btn" data-tab="test" role="tab">Test <span class="badge">M10✓</span></button>
 </nav>
 
 <!-- ══════════════════ FRONTEND TAB ══════════════════ -->
@@ -146,6 +184,10 @@
       <a href="https://huggingface.co/rhasspy/piper-voices" target="_blank">rhasspy/piper-voices</a>.
       English: <code>en/en_US/amy/medium/</code> · Spanish: <code>es/es_AR/daniela/high/</code></p>
     </details>
+    <div id="tts-cached-row" class="row" style="display:none;margin-bottom:0.6rem;align-items:center;gap:0.8rem">
+      <span id="tts-cache-status" class="status ok"></span>
+      <button id="tts-cache-clear-btn" class="secondary" style="font-size:0.8rem;padding:0.2rem 0.7rem">Clear cached model</button>
+    </div>
     <div class="file-row" style="margin-top:0.5rem">
       <div>
         <label>Model file (.onnx)</label>
@@ -170,8 +212,100 @@
       <div class="col">
         <label>Language</label>
         <select id="lang">
-          <option value="en">English (en)</option>
+          <option value="af">Afrikaans (af)</option>
+          <option value="sq">Albanian (sq)</option>
+          <option value="am">Amharic (am)</option>
+          <option value="an">Aragonese (an)</option>
+          <option value="ar">Arabic (ar)</option>
+          <option value="hy">Armenian (hy)</option>
+          <option value="as">Assamese (as)</option>
+          <option value="az">Azerbaijani (az)</option>
+          <option value="ba">Bashkir (ba)</option>
+          <option value="eu">Basque (eu)</option>
+          <option value="be">Belarusian (be)</option>
+          <option value="bn">Bengali (bn)</option>
+          <option value="bs">Bosnian (bs)</option>
+          <option value="bpy">Bishnupriya (bpy)</option>
+          <option value="bg">Bulgarian (bg)</option>
+          <option value="ca">Catalan (ca)</option>
+          <option value="chr">Cherokee (chr)</option>
+          <option value="cmn">Chinese — Mandarin (cmn)</option>
+          <option value="yue">Chinese — Cantonese (yue)</option>
+          <option value="hak">Chinese — Hakka (hak)</option>
+          <option value="hr">Croatian (hr)</option>
+          <option value="cs">Czech (cs)</option>
+          <option value="da">Danish (da)</option>
+          <option value="nl">Dutch (nl)</option>
+          <option value="en" selected>English (en)</option>
+          <option value="en-US">English — US (en-US)</option>
+          <option value="en-GB-x-rp">English — GB RP (en-GB-x-rp)</option>
+          <option value="eo">Esperanto (eo)</option>
+          <option value="et">Estonian (et)</option>
+          <option value="fa">Persian / Farsi (fa)</option>
+          <option value="fi">Finnish (fi)</option>
+          <option value="fr">French (fr)</option>
+          <option value="ga">Irish (ga)</option>
+          <option value="gd">Scottish Gaelic (gd)</option>
+          <option value="ka">Georgian (ka)</option>
+          <option value="de">German (de)</option>
+          <option value="el">Greek (el)</option>
+          <option value="grc">Greek — Ancient (grc)</option>
+          <option value="gu">Gujarati (gu)</option>
+          <option value="ht">Haitian Creole (ht)</option>
+          <option value="haw">Hawaiian (haw)</option>
+          <option value="he">Hebrew (he)</option>
+          <option value="hi">Hindi (hi)</option>
+          <option value="hu">Hungarian (hu)</option>
+          <option value="ia">Interlingua (ia)</option>
+          <option value="id">Indonesian (id)</option>
+          <option value="is">Icelandic (is)</option>
+          <option value="it">Italian (it)</option>
+          <option value="ja">Japanese (ja)</option>
+          <option value="kn">Kannada (kn)</option>
+          <option value="kk">Kazakh (kk)</option>
+          <option value="ko">Korean (ko)</option>
+          <option value="ku">Kurdish (ku)</option>
+          <option value="ky">Kyrgyz (ky)</option>
+          <option value="la">Latin (la)</option>
+          <option value="lv">Latvian (lv)</option>
+          <option value="lb">Luxembourgish (lb)</option>
+          <option value="lt">Lithuanian (lt)</option>
+          <option value="mk">Macedonian (mk)</option>
+          <option value="ms">Malay (ms)</option>
+          <option value="ml">Malayalam (ml)</option>
+          <option value="mt">Maltese (mt)</option>
+          <option value="mi">Māori (mi)</option>
+          <option value="mr">Marathi (mr)</option>
+          <option value="my">Myanmar / Burmese (my)</option>
+          <option value="ne">Nepali (ne)</option>
+          <option value="nb">Norwegian Bokmål (nb)</option>
+          <option value="or">Odia (or)</option>
+          <option value="om">Oromo (om)</option>
+          <option value="pa">Punjabi (pa)</option>
+          <option value="pl">Polish (pl)</option>
+          <option value="pt">Portuguese (pt)</option>
+          <option value="pt-BR">Portuguese — Brazil (pt-BR)</option>
+          <option value="ro">Romanian (ro)</option>
+          <option value="ru">Russian (ru)</option>
+          <option value="sd">Sindhi (sd)</option>
+          <option value="si">Sinhala (si)</option>
+          <option value="sk">Slovak (sk)</option>
+          <option value="sl">Slovenian (sl)</option>
           <option value="es">Spanish (es)</option>
+          <option value="es-419">Spanish — Latin America (es-419)</option>
+          <option value="sr">Serbian (sr)</option>
+          <option value="sw">Swahili (sw)</option>
+          <option value="sv">Swedish (sv)</option>
+          <option value="ta">Tamil (ta)</option>
+          <option value="te">Telugu (te)</option>
+          <option value="th">Thai (th)</option>
+          <option value="tr">Turkish (tr)</option>
+          <option value="tk">Turkmen (tk)</option>
+          <option value="uk">Ukrainian (uk)</option>
+          <option value="ur">Urdu (ur)</option>
+          <option value="uz">Uzbek (uz)</option>
+          <option value="vi">Vietnamese (vi)</option>
+          <option value="cy">Welsh (cy)</option>
         </select>
       </div>
       <div class="col">
@@ -273,6 +407,200 @@
 
 </section>
 
+<!-- ══════════════════ PREVIEW TAB ══════════════════ -->
+<section id="tab-preview" class="tab-panel" role="tabpanel">
+
+  <div class="card">
+    <h2>Voice Model &amp; Phrase</h2>
+    <p id="prev-model-status" class="status">No model loaded — go to the TTS tab first.</p>
+    <div class="row" style="margin-top:0.6rem">
+      <div class="col">
+        <label>Phrase</label>
+        <input type="text" id="prev-phrase" value="hey lumus">
+      </div>
+      <div class="col">
+        <label>Language</label>
+        <select id="prev-lang">
+          <option value="af">Afrikaans (af)</option>
+          <option value="sq">Albanian (sq)</option>
+          <option value="am">Amharic (am)</option>
+          <option value="an">Aragonese (an)</option>
+          <option value="ar">Arabic (ar)</option>
+          <option value="hy">Armenian (hy)</option>
+          <option value="as">Assamese (as)</option>
+          <option value="az">Azerbaijani (az)</option>
+          <option value="ba">Bashkir (ba)</option>
+          <option value="eu">Basque (eu)</option>
+          <option value="be">Belarusian (be)</option>
+          <option value="bn">Bengali (bn)</option>
+          <option value="bs">Bosnian (bs)</option>
+          <option value="bpy">Bishnupriya (bpy)</option>
+          <option value="bg">Bulgarian (bg)</option>
+          <option value="ca">Catalan (ca)</option>
+          <option value="chr">Cherokee (chr)</option>
+          <option value="cmn">Chinese — Mandarin (cmn)</option>
+          <option value="yue">Chinese — Cantonese (yue)</option>
+          <option value="hak">Chinese — Hakka (hak)</option>
+          <option value="hr">Croatian (hr)</option>
+          <option value="cs">Czech (cs)</option>
+          <option value="da">Danish (da)</option>
+          <option value="nl">Dutch (nl)</option>
+          <option value="en" selected>English (en)</option>
+          <option value="en-US">English — US (en-US)</option>
+          <option value="en-GB-x-rp">English — GB RP (en-GB-x-rp)</option>
+          <option value="eo">Esperanto (eo)</option>
+          <option value="et">Estonian (et)</option>
+          <option value="fa">Persian / Farsi (fa)</option>
+          <option value="fi">Finnish (fi)</option>
+          <option value="fr">French (fr)</option>
+          <option value="ga">Irish (ga)</option>
+          <option value="gd">Scottish Gaelic (gd)</option>
+          <option value="ka">Georgian (ka)</option>
+          <option value="de">German (de)</option>
+          <option value="el">Greek (el)</option>
+          <option value="grc">Greek — Ancient (grc)</option>
+          <option value="gu">Gujarati (gu)</option>
+          <option value="ht">Haitian Creole (ht)</option>
+          <option value="haw">Hawaiian (haw)</option>
+          <option value="he">Hebrew (he)</option>
+          <option value="hi">Hindi (hi)</option>
+          <option value="hu">Hungarian (hu)</option>
+          <option value="ia">Interlingua (ia)</option>
+          <option value="id">Indonesian (id)</option>
+          <option value="is">Icelandic (is)</option>
+          <option value="it">Italian (it)</option>
+          <option value="ja">Japanese (ja)</option>
+          <option value="kn">Kannada (kn)</option>
+          <option value="kk">Kazakh (kk)</option>
+          <option value="ko">Korean (ko)</option>
+          <option value="ku">Kurdish (ku)</option>
+          <option value="ky">Kyrgyz (ky)</option>
+          <option value="la">Latin (la)</option>
+          <option value="lv">Latvian (lv)</option>
+          <option value="lb">Luxembourgish (lb)</option>
+          <option value="lt">Lithuanian (lt)</option>
+          <option value="mk">Macedonian (mk)</option>
+          <option value="ms">Malay (ms)</option>
+          <option value="ml">Malayalam (ml)</option>
+          <option value="mt">Maltese (mt)</option>
+          <option value="mi">Māori (mi)</option>
+          <option value="mr">Marathi (mr)</option>
+          <option value="my">Myanmar / Burmese (my)</option>
+          <option value="ne">Nepali (ne)</option>
+          <option value="nb">Norwegian Bokmål (nb)</option>
+          <option value="or">Odia (or)</option>
+          <option value="om">Oromo (om)</option>
+          <option value="pa">Punjabi (pa)</option>
+          <option value="pl">Polish (pl)</option>
+          <option value="pt">Portuguese (pt)</option>
+          <option value="pt-BR">Portuguese — Brazil (pt-BR)</option>
+          <option value="ro">Romanian (ro)</option>
+          <option value="ru">Russian (ru)</option>
+          <option value="sd">Sindhi (sd)</option>
+          <option value="si">Sinhala (si)</option>
+          <option value="sk">Slovak (sk)</option>
+          <option value="sl">Slovenian (sl)</option>
+          <option value="es">Spanish (es)</option>
+          <option value="es-419">Spanish — Latin America (es-419)</option>
+          <option value="sr">Serbian (sr)</option>
+          <option value="sw">Swahili (sw)</option>
+          <option value="sv">Swedish (sv)</option>
+          <option value="ta">Tamil (ta)</option>
+          <option value="te">Telugu (te)</option>
+          <option value="th">Thai (th)</option>
+          <option value="tr">Turkish (tr)</option>
+          <option value="tk">Turkmen (tk)</option>
+          <option value="uk">Ukrainian (uk)</option>
+          <option value="ur">Urdu (ur)</option>
+          <option value="uz">Uzbek (uz)</option>
+          <option value="vi">Vietnamese (vi)</option>
+          <option value="cy">Welsh (cy)</option>
+        </select>
+      </div>
+      <div class="col">
+        <label>Samples</label>
+        <input type="number" id="prev-count" value="8" min="1" max="50" style="width:4rem">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Augmentation</h2>
+    <div class="ctrl-grid">
+      <label>Pitch prob</label>
+      <input type="range" id="prev-pitch-prob" min="0" max="1" step="0.05" value="0.5">
+      <span class="range-val" id="prev-pitch-prob-val">0.5</span>
+
+      <label>Pitch (±semitones)</label>
+      <input type="range" id="prev-pitch-st" min="0" max="6" step="0.5" value="3">
+      <span class="range-val" id="prev-pitch-st-val">3</span>
+
+      <label>Reverb prob</label>
+      <input type="range" id="prev-reverb-prob" min="0" max="1" step="0.05" value="0.5">
+      <span class="range-val" id="prev-reverb-prob-val">0.5</span>
+
+      <label>Noise prob</label>
+      <input type="range" id="prev-noise-prob" min="0" max="1" step="0.05" value="0.75">
+      <span class="range-val" id="prev-noise-prob-val">0.75</span>
+
+      <label>Noise SNR min (dB)</label>
+      <input type="range" id="prev-snr-min" min="-15" max="20" step="1" value="-10">
+      <span class="range-val" id="prev-snr-min-val">-10</span>
+    </div>
+    <div class="row" style="margin-top:0.5rem">
+      <label style="display:flex;align-items:center;gap:0.35rem;margin:0">
+        <input type="checkbox" id="prev-eq" checked> 7-band EQ
+      </label>
+    </div>
+    <div class="row" style="margin-top:0.7rem">
+      <button id="prev-gen-btn" disabled>Generate &amp; Augment</button>
+      <span id="prev-status" class="status" style="margin-left:0.6rem"></span>
+    </div>
+    <progress id="prev-progress" value="0" max="1"
+              style="display:none;width:100%;margin-top:0.4rem"></progress>
+  </div>
+
+  <div id="prev-results"></div>
+
+</section>
+
+<!-- ══════════════════ RECORD TAB ══════════════════ -->
+<section id="tab-record" class="tab-panel" role="tabpanel">
+
+  <div class="card">
+    <h2>Capture Voice Sample</h2>
+    <p class="status" style="margin-bottom:0.6rem">
+      Record yourself saying the wake phrase. Microphone access required (works on localhost).
+    </p>
+    <div class="row">
+      <button id="rec-start-btn">● Record</button>
+      <button id="rec-stop-btn" class="secondary" disabled>■ Stop</button>
+      <button id="rec-clear-btn" class="secondary" style="display:none">✕ Discard</button>
+      <span id="rec-timer"></span>
+    </div>
+    <div id="rec-preview" style="display:none;margin-top:0.8rem">
+      <audio id="rec-audio" controls style="width:100%;margin-bottom:0.3rem"></audio>
+      <div class="spec-wrap" id="rec-spec-wrap">
+        <canvas id="rec-canvas" class="spectrogram"></canvas>
+        <p class="spec-label">Frontend spectrogram at 16 kHz</p>
+      </div>
+      <div class="row" style="margin-top:0.6rem">
+        <button id="rec-add-btn">Add to training samples</button>
+        <span id="rec-add-status" class="status" style="margin-left:0.6rem"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Recorded Samples <span id="rec-pool-badge" class="badge">0</span></h2>
+    <p id="rec-pool-status" class="status">
+      No recordings yet. Recordings are merged with TTS-generated samples at training time.
+    </p>
+    <div id="rec-pool-list" style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.5rem"></div>
+  </div>
+
+</section>
+
 <!-- ══════════════════ TRAIN TAB ══════════════════ -->
 <section id="tab-train" class="tab-panel" role="tabpanel">
 
@@ -294,8 +622,100 @@
       <div class="col">
         <label>Language</label>
         <select id="train-lang">
-          <option value="en">English (en)</option>
+          <option value="af">Afrikaans (af)</option>
+          <option value="sq">Albanian (sq)</option>
+          <option value="am">Amharic (am)</option>
+          <option value="an">Aragonese (an)</option>
+          <option value="ar">Arabic (ar)</option>
+          <option value="hy">Armenian (hy)</option>
+          <option value="as">Assamese (as)</option>
+          <option value="az">Azerbaijani (az)</option>
+          <option value="ba">Bashkir (ba)</option>
+          <option value="eu">Basque (eu)</option>
+          <option value="be">Belarusian (be)</option>
+          <option value="bn">Bengali (bn)</option>
+          <option value="bs">Bosnian (bs)</option>
+          <option value="bpy">Bishnupriya (bpy)</option>
+          <option value="bg">Bulgarian (bg)</option>
+          <option value="ca">Catalan (ca)</option>
+          <option value="chr">Cherokee (chr)</option>
+          <option value="cmn">Chinese — Mandarin (cmn)</option>
+          <option value="yue">Chinese — Cantonese (yue)</option>
+          <option value="hak">Chinese — Hakka (hak)</option>
+          <option value="hr">Croatian (hr)</option>
+          <option value="cs">Czech (cs)</option>
+          <option value="da">Danish (da)</option>
+          <option value="nl">Dutch (nl)</option>
+          <option value="en" selected>English (en)</option>
+          <option value="en-US">English — US (en-US)</option>
+          <option value="en-GB-x-rp">English — GB RP (en-GB-x-rp)</option>
+          <option value="eo">Esperanto (eo)</option>
+          <option value="et">Estonian (et)</option>
+          <option value="fa">Persian / Farsi (fa)</option>
+          <option value="fi">Finnish (fi)</option>
+          <option value="fr">French (fr)</option>
+          <option value="ga">Irish (ga)</option>
+          <option value="gd">Scottish Gaelic (gd)</option>
+          <option value="ka">Georgian (ka)</option>
+          <option value="de">German (de)</option>
+          <option value="el">Greek (el)</option>
+          <option value="grc">Greek — Ancient (grc)</option>
+          <option value="gu">Gujarati (gu)</option>
+          <option value="ht">Haitian Creole (ht)</option>
+          <option value="haw">Hawaiian (haw)</option>
+          <option value="he">Hebrew (he)</option>
+          <option value="hi">Hindi (hi)</option>
+          <option value="hu">Hungarian (hu)</option>
+          <option value="ia">Interlingua (ia)</option>
+          <option value="id">Indonesian (id)</option>
+          <option value="is">Icelandic (is)</option>
+          <option value="it">Italian (it)</option>
+          <option value="ja">Japanese (ja)</option>
+          <option value="kn">Kannada (kn)</option>
+          <option value="kk">Kazakh (kk)</option>
+          <option value="ko">Korean (ko)</option>
+          <option value="ku">Kurdish (ku)</option>
+          <option value="ky">Kyrgyz (ky)</option>
+          <option value="la">Latin (la)</option>
+          <option value="lv">Latvian (lv)</option>
+          <option value="lb">Luxembourgish (lb)</option>
+          <option value="lt">Lithuanian (lt)</option>
+          <option value="mk">Macedonian (mk)</option>
+          <option value="ms">Malay (ms)</option>
+          <option value="ml">Malayalam (ml)</option>
+          <option value="mt">Maltese (mt)</option>
+          <option value="mi">Māori (mi)</option>
+          <option value="mr">Marathi (mr)</option>
+          <option value="my">Myanmar / Burmese (my)</option>
+          <option value="ne">Nepali (ne)</option>
+          <option value="nb">Norwegian Bokmål (nb)</option>
+          <option value="or">Odia (or)</option>
+          <option value="om">Oromo (om)</option>
+          <option value="pa">Punjabi (pa)</option>
+          <option value="pl">Polish (pl)</option>
+          <option value="pt">Portuguese (pt)</option>
+          <option value="pt-BR">Portuguese — Brazil (pt-BR)</option>
+          <option value="ro">Romanian (ro)</option>
+          <option value="ru">Russian (ru)</option>
+          <option value="sd">Sindhi (sd)</option>
+          <option value="si">Sinhala (si)</option>
+          <option value="sk">Slovak (sk)</option>
+          <option value="sl">Slovenian (sl)</option>
           <option value="es">Spanish (es)</option>
+          <option value="es-419">Spanish — Latin America (es-419)</option>
+          <option value="sr">Serbian (sr)</option>
+          <option value="sw">Swahili (sw)</option>
+          <option value="sv">Swedish (sv)</option>
+          <option value="ta">Tamil (ta)</option>
+          <option value="te">Telugu (te)</option>
+          <option value="th">Thai (th)</option>
+          <option value="tr">Turkish (tr)</option>
+          <option value="tk">Turkmen (tk)</option>
+          <option value="uk">Ukrainian (uk)</option>
+          <option value="ur">Urdu (ur)</option>
+          <option value="uz">Uzbek (uz)</option>
+          <option value="vi">Vietnamese (vi)</option>
+          <option value="cy">Welsh (cy)</option>
         </select>
       </div>
     </div>
@@ -376,6 +796,121 @@
     <div class="row" style="margin-top:0.7rem">
       <button id="neg-clear-btn" class="secondary" style="display:none">Clear cache</button>
     </div>
+
+    <hr style="margin:1rem 0;border:none;border-top:1px solid #e5e7eb">
+    <h3 style="margin:0 0 0.5rem">Generate in-browser</h3>
+    <p style="margin:0 0 0.6rem;font-size:0.9rem;color:#555">
+      Uses the loaded Piper model to synthesise diverse speech samples and computes their spectrograms locally.
+      No external download needed. Requires the model to be loaded in the TTS tab first.
+    </p>
+    <div class="row" style="gap:0.8rem;align-items:flex-end">
+      <div>
+        <label>Samples per category</label>
+        <input type="number" id="neg-gen-count" value="150" min="20" max="500" style="width:4.5rem">
+      </div>
+      <div>
+        <label>Language</label>
+        <select id="neg-gen-lang">
+          <option value="af">Afrikaans (af)</option>
+          <option value="sq">Albanian (sq)</option>
+          <option value="am">Amharic (am)</option>
+          <option value="an">Aragonese (an)</option>
+          <option value="ar">Arabic (ar)</option>
+          <option value="hy">Armenian (hy)</option>
+          <option value="as">Assamese (as)</option>
+          <option value="az">Azerbaijani (az)</option>
+          <option value="ba">Bashkir (ba)</option>
+          <option value="eu">Basque (eu)</option>
+          <option value="be">Belarusian (be)</option>
+          <option value="bn">Bengali (bn)</option>
+          <option value="bs">Bosnian (bs)</option>
+          <option value="bpy">Bishnupriya (bpy)</option>
+          <option value="bg">Bulgarian (bg)</option>
+          <option value="ca">Catalan (ca)</option>
+          <option value="chr">Cherokee (chr)</option>
+          <option value="cmn">Chinese — Mandarin (cmn)</option>
+          <option value="yue">Chinese — Cantonese (yue)</option>
+          <option value="hak">Chinese — Hakka (hak)</option>
+          <option value="hr">Croatian (hr)</option>
+          <option value="cs">Czech (cs)</option>
+          <option value="da">Danish (da)</option>
+          <option value="nl">Dutch (nl)</option>
+          <option value="en" selected>English (en)</option>
+          <option value="en-US">English — US (en-US)</option>
+          <option value="en-GB-x-rp">English — GB RP (en-GB-x-rp)</option>
+          <option value="eo">Esperanto (eo)</option>
+          <option value="et">Estonian (et)</option>
+          <option value="fa">Persian / Farsi (fa)</option>
+          <option value="fi">Finnish (fi)</option>
+          <option value="fr">French (fr)</option>
+          <option value="ga">Irish (ga)</option>
+          <option value="gd">Scottish Gaelic (gd)</option>
+          <option value="ka">Georgian (ka)</option>
+          <option value="de">German (de)</option>
+          <option value="el">Greek (el)</option>
+          <option value="grc">Greek — Ancient (grc)</option>
+          <option value="gu">Gujarati (gu)</option>
+          <option value="ht">Haitian Creole (ht)</option>
+          <option value="haw">Hawaiian (haw)</option>
+          <option value="he">Hebrew (he)</option>
+          <option value="hi">Hindi (hi)</option>
+          <option value="hu">Hungarian (hu)</option>
+          <option value="ia">Interlingua (ia)</option>
+          <option value="id">Indonesian (id)</option>
+          <option value="is">Icelandic (is)</option>
+          <option value="it">Italian (it)</option>
+          <option value="ja">Japanese (ja)</option>
+          <option value="kn">Kannada (kn)</option>
+          <option value="kk">Kazakh (kk)</option>
+          <option value="ko">Korean (ko)</option>
+          <option value="ku">Kurdish (ku)</option>
+          <option value="ky">Kyrgyz (ky)</option>
+          <option value="la">Latin (la)</option>
+          <option value="lv">Latvian (lv)</option>
+          <option value="lb">Luxembourgish (lb)</option>
+          <option value="lt">Lithuanian (lt)</option>
+          <option value="mk">Macedonian (mk)</option>
+          <option value="ms">Malay (ms)</option>
+          <option value="ml">Malayalam (ml)</option>
+          <option value="mt">Maltese (mt)</option>
+          <option value="mi">Māori (mi)</option>
+          <option value="mr">Marathi (mr)</option>
+          <option value="my">Myanmar / Burmese (my)</option>
+          <option value="ne">Nepali (ne)</option>
+          <option value="nb">Norwegian Bokmål (nb)</option>
+          <option value="or">Odia (or)</option>
+          <option value="om">Oromo (om)</option>
+          <option value="pa">Punjabi (pa)</option>
+          <option value="pl">Polish (pl)</option>
+          <option value="pt">Portuguese (pt)</option>
+          <option value="pt-BR">Portuguese — Brazil (pt-BR)</option>
+          <option value="ro">Romanian (ro)</option>
+          <option value="ru">Russian (ru)</option>
+          <option value="sd">Sindhi (sd)</option>
+          <option value="si">Sinhala (si)</option>
+          <option value="sk">Slovak (sk)</option>
+          <option value="sl">Slovenian (sl)</option>
+          <option value="es">Spanish (es)</option>
+          <option value="es-419">Spanish — Latin America (es-419)</option>
+          <option value="sr">Serbian (sr)</option>
+          <option value="sw">Swahili (sw)</option>
+          <option value="sv">Swedish (sv)</option>
+          <option value="ta">Tamil (ta)</option>
+          <option value="te">Telugu (te)</option>
+          <option value="th">Thai (th)</option>
+          <option value="tr">Turkish (tr)</option>
+          <option value="tk">Turkmen (tk)</option>
+          <option value="uk">Ukrainian (uk)</option>
+          <option value="ur">Urdu (ur)</option>
+          <option value="uz">Uzbek (uz)</option>
+          <option value="vi">Vietnamese (vi)</option>
+          <option value="cy">Welsh (cy)</option>
+        </select>
+      </div>
+      <button id="neg-gen-btn">Generate negatives</button>
+    </div>
+    <progress id="neg-gen-progress" value="0" max="1" style="display:none;margin-top:0.5rem"></progress>
+    <p id="neg-gen-status" class="status" style="margin-top:0.3rem"></p>
   </div>
 
   <!-- Background noise card -->
@@ -432,8 +967,72 @@
       <li class="done">✓ M6 — Negative samples (IndexedDB cache)</li>
       <li class="done">✓ M6.5 — Background noise bundle (OPFS, ~100 MB curated)</li>
       <li class="done">✓ M7 — Training loop UI (loss curve, progress, weight export)</li>
-      <li class="next">→ M8 — Python TFLite quantisation from exported weights</li>
+      <li class="done">✓ M8 — TFLite export (superseded by M9)</li>
+      <li class="done">✓ M9 — Browser INT8 TFLite export (BN folding, calibration, FlatBuffer)</li>
+      <li class="done">✓ M10 — In-browser test tab (live mic + WAV inference)</li>
     </ul>
+  </div>
+
+</section>
+
+<!-- ══════════════════ TEST TAB ══════════════════ -->
+<section id="tab-test" class="tab-panel" role="tabpanel">
+
+  <div class="card">
+    <h2>Model</h2>
+    <p id="test-model-status" class="status">No model loaded. Train and export a TFLite, or load a .tflite file below.</p>
+    <div id="test-model-info"></div>
+    <div class="file-row" style="margin-top:0.6rem">
+      <div>
+        <label>Load .tflite file</label>
+        <input type="file" id="test-model-file" accept=".tflite">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:0.4rem">
+      <label style="margin:0;display:flex;align-items:center;gap:0.4rem">
+        <input type="checkbox" id="test-esp32-mode">
+        ESP32 exact quantization (256/666)
+      </label>
+      <span id="test-qinfo" style="font-size:0.78rem;color:#666;font-family:monospace"></span>
+    </div>
+    <div class="row">
+      <label style="margin:0;display:flex;align-items:center;gap:0.5rem">
+        Threshold
+        <input type="range" id="test-thr" min="0.01" max="1" step="0.01" value="0.5" style="width:10rem">
+        <span class="range-val" id="test-thr-val">0.50</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live mic</h2>
+    <div class="row" style="margin-bottom:0.4rem">
+      <button id="test-mic-start" disabled>▶ Start mic</button>
+      <button id="test-mic-stop" disabled>■ Stop</button>
+      <span id="test-mic-score">—</span>
+      <span id="test-mic-detected"></span>
+    </div>
+    <div style="width:100%;height:14px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-bottom:0.5rem">
+      <div id="test-mic-bar" style="height:100%;width:0%;background:#2563eb;transition:width 0.05s"></div>
+    </div>
+    <canvas id="test-mic-spec"></canvas>
+    <div id="test-mic-log"></div>
+  </div>
+
+  <div class="card">
+    <h2>Test WAV file</h2>
+    <div class="file-row">
+      <input type="file" id="test-wav-file" accept=".wav,audio/*">
+      <button id="test-wav-run" disabled>Run inference</button>
+    </div>
+    <p id="test-wav-out" class="status"></p>
+    <div id="test-wav-spec-wrap" class="spec-wrap">
+      <canvas id="test-wav-spec" class="spectrogram"></canvas>
+      <p class="spec-label">40 log-mel filterbanks · 10 ms/frame · 16 kHz</p>
+    </div>
   </div>
 
 </section>
@@ -441,6 +1040,8 @@
 <!-- ── Scripts ────────────────────────────────────────────────────────────── -->
 <script src="piper_phonemize.js"></script>
 <script src="web_trainer.js"></script>
+<script src="js/piper_cache.js"></script>
+<script src="js/lang_loader.js"></script>
 <script src="js/piper.js"></script>
 <script src="js/augment.js"></script>
 <script src="js/spectrogram.js"></script>
@@ -448,6 +1049,10 @@
 <script src="js/noise.js"></script>
 <script src="js/trainer.js"></script>
 <script src="js/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
+<script src="js/tflite_cache.js"></script>
+<script src="js/test_tab.js"></script>
 
 <script>
 // Wire up the "before" audio player duplication (result card mirrors the source).

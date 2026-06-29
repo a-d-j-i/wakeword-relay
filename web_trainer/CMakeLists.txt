@@ -100,7 +100,7 @@ if(EMSCRIPTEN)
     set_target_properties(piper_phonemize PROPERTIES
         SUFFIX ".js"
         LINK_FLAGS "\
-            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString'] \
+            -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','UTF8ToString','FS'] \
             -sEXPORTED_FUNCTIONS=['_malloc','_free','_phonemize_init','_phonemize','_phonemize_free'] \
             -sALLOW_MEMORY_GROWTH=1 \
             -sINITIAL_MEMORY=33554432 \

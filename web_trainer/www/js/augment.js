@@ -45,10 +45,14 @@ function loadWav(buffer) {
         const byteOff = dataOffset + i * bytesPerSample * numChannels;
         if (bitsPerSample === 16) {
             samples[i] = v.getInt16(byteOff, true) / 32768.0;
+        } else if (bitsPerSample === 24) {
+            const lo = v.getUint8(byteOff);
+            const mi = v.getUint8(byteOff + 1);
+            const hi = v.getInt8(byteOff + 2);   // signed
+            samples[i] = ((hi << 16) | (mi << 8) | lo) / 8388608.0;
         } else if (bitsPerSample === 32) {
             samples[i] = v.getFloat32(byteOff, true);
         }
-        // Other bit depths produce silence (0)
     }
 
     return { samples, sampleRate };
@@ -367,4 +371,30 @@ function augmentSample(samples, sampleRate, options = {}) {
     }
 
     return out;
+}
+
+// ── SpecAugment ───────────────────────────────────────────────────────────────
+
+// Apply SpecAugment (Park et al. 2019) to a spectrogram in-place.
+// spec: Float32Array of T × numFeats values, row-major (frame-major).
+// Matches train.py defaults: 2 time masks × max 5 frames, 2 freq masks × max 5 bins.
+function specAugment(spec, T, numFeats = 40,
+    timeMaskMaxSize = 5, timeMaskCount = 2,
+    freqMaskMaxSize = 5, freqMaskCount = 2) {
+
+    for (let i = 0; i < timeMaskCount; i++) {
+        const t  = Math.floor(Math.random() * timeMaskMaxSize);
+        if (t === 0 || t >= T) continue;
+        const t0 = Math.floor(Math.random() * (T - t));
+        for (let fr = t0; fr < t0 + t; fr++)
+            spec.fill(0, fr * numFeats, fr * numFeats + numFeats);
+    }
+
+    for (let i = 0; i < freqMaskCount; i++) {
+        const f  = Math.floor(Math.random() * freqMaskMaxSize);
+        if (f === 0) continue;
+        const f0 = Math.floor(Math.random() * (numFeats - f));
+        for (let fr = 0; fr < T; fr++)
+            spec.fill(0, fr * numFeats + f0, fr * numFeats + f0 + f);
+    }
 }

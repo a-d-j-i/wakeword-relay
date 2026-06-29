@@ -14,6 +14,7 @@ async function initPhonemizer() {
     _phonemizeModule = await createPiperPhonemize();
     const rc = _phonemizeModule.ccall('phonemize_init', 'number', [], []);
     if (rc !== 0) throw new Error('espeak-ng init failed (rc=' + rc + ')');
+    initLangLoader(_phonemizeModule);
 }
 
 // Returns a space-separated IPA string for the given text and espeak language code.
@@ -107,6 +108,7 @@ async function synthesise(session, voiceConfig, text, lang, noiseScale, lengthSc
     const phonemeIdMap = voiceConfig.phoneme_id_map;
 
     const espeakVoice = voiceConfig.espeak?.voice ?? lang;
+    await loadLanguage(espeakVoice);
     const ipa        = textToIpa(text, espeakVoice);
     const phonemeIds = ipaToIds(ipa, phonemeIdMap);
 
@@ -140,6 +142,7 @@ async function generateSamples(modelUrl, voiceConfig, text, lang, count, onProgr
     const espeakVoice = voiceConfig.espeak?.voice ?? lang;
 
     // Compute phoneme IDs once on the main thread (espeak-ng is already loaded here).
+    await loadLanguage(espeakVoice);
     const ipa        = textToIpa(text, espeakVoice);
     const phonemeIds = ipaToIds(ipa, voiceConfig.phoneme_id_map);
 

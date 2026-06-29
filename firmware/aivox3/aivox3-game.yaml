@@ -1,0 +1,249 @@
+# =============================================================================
+# AI-VOX3 "frío / tibio / caliente" GAME (no-audio version).
+# Say the active wake word; the DETECTION PROBABILITY decides how "hot" you got:
+#   prob < 0.50         -> frío     (LED blue)        no toggle
+#   0.50 .. 0.65        -> tibio    (LED amber)       no toggle
+#   0.65 .. 0.80        -> caliente (LED red)         no toggle
+#   >= 0.80             -> WIN      (LED green) -> TOGGLE the relay + switch word
+# The LCD shows a thermometer (fill = probability, colour = tier) + a sun/moon for relay state.
+#
+# REQUIRES the patched micro_wake_word (trigger now passes `probability`):
+#   .h  Trigger<std::string,float> ; .cpp passes average_probability/255 ; __init__ adds float param.
+# Cutoff is LOW (0.3) so weak attempts still fire and read "frío". TUNE the tier
+# thresholds below to the `prob=` values you see logged (sliding-AVERAGE prob runs lower
+# than max — if WIN never triggers, lower 0.80).
+#
+# Audio feedback (speaking frío/tibio/caliente) is deferred: the mic<->speaker switch with
+# micro_wake_word in the loop is unreliable in ESPHome (see aivox3-audiotest.yaml). Revisit
+# with a full-duplex custom component if voice is wanted.
+# Flash:  esphome run firmware/aivox3/aivox3-game.yaml
+# =============================================================================
+
+esphome:
+  name: aivox3-game
+  on_boot:
+    - priority: -100
+      then:
+        - light.turn_on: { id: onboard_led, red: 15%, green: 8%, blue: 0%, brightness: 30%, transition_length: 0s }
+        - component.update: lcd
+        - micro_wake_word.start:
+        - micro_wake_word.enable_model: turn_on_model      # deterministic boot: OFF, listen for "turn on"
+        - micro_wake_word.disable_model: turn_off_model
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: USB_SERIAL_JTAG
+
+i2c:
+  id: bus_a
+  sda: GPIO13
+  scl: GPIO12
+  frequency: 400kHz
+  scan: true
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO10
+    i2s_mclk_pin: GPIO11
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    use_microphone: false
+    mic_gain: 30DB
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO9
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: left
+
+micro_wake_word:
+  microphone: mic
+  stop_after_detection: false
+  models:
+    - model: ../models/turn_on.json    # chispa mágica
+      id: turn_on_model
+      probability_cutoff: 0.2          # LOW so weak attempts still fire -> "frío" feedback
+      sliding_window_size: 2           # default 5 averages over 5 windows -> dilutes brief/weak tries
+      internal: true                   #   AND squishes the range (why max was ~0.64). 2 = wider/higher prob.
+    - model: ../models/turn_off.json   # buenas noches
+      id: turn_off_model
+      probability_cutoff: 0.2
+      sliding_window_size: 2
+      internal: true
+
+  # on_wake_word_detected receives (wake_word, probability) thanks to the patch.
+  # The AVERAGE prob range is tiny (cutoff 0.30 .. usual 0.33 .. best ~0.64; max-prob is useless,
+  # pinned at 1.0). Only a WIN (>= WIN_THRESH) switches the relay + word, exactly like aivox3.yaml;
+  # lower tiers are "how close" feedback, no switch. WIN_THRESH is the one knob to tune.
+  on_wake_word_detected:
+    then:
+      - lambda: |-
+          id(game_prob) = probability;
+          // Per-word win bar (buenas noches/turn_off is the weaker model -> lower bar). Set EASY:
+          // raise toward best (chispa ~0.59, buenas ~0.50) to make it harder.
+          float win = (wake_word == "turn_off") ? 0.42f : 0.42f;
+          id(win_thresh) = win;
+          if      (probability >= win)        id(game_tier) = 4;   // WIN
+          else if (probability >= 0.80f * win) id(game_tier) = 3;  // caliente
+          else if (probability >= 0.55f * win) id(game_tier) = 2;  // tibio
+          else                                id(game_tier) = 1;   // frío
+          ESP_LOGI("game", "wake='%s'  prob=%.2f  win=%.2f  tier=%d", wake_word.c_str(), probability, win, id(game_tier));
+      - if:
+          condition: { lambda: 'return id(game_tier) == 4;' }      # WIN -> switch relay + word (like aivox3.yaml)
+          then:
+            - light.turn_on: { id: onboard_led, red: 0%, green: 100%, blue: 0%, transition_length: 0s }   # win = green
+            - if:
+                condition: { lambda: 'return id(scene) == 2;' }    # currently OFF -> turn ON
+                then:
+                  - lambda: 'id(scene) = 1;'
+                  - switch.turn_on: relay
+                  - micro_wake_word.disable_model: turn_on_model
+                  - micro_wake_word.enable_model: turn_off_model
+                else:                                              # currently ON -> turn OFF
+                  - lambda: 'id(scene) = 2;'
+                  - switch.turn_off: relay
+                  - micro_wake_word.disable_model: turn_off_model
+                  - micro_wake_word.enable_model: turn_on_model
+            - component.update: lcd                                # show the full winning thermometer + flipped sun/moon
+            - delay: 500ms
+            - lambda: 'id(game_prob) = 0.0f; id(game_tier) = 0;'   # reset the gauge for the next round
+          else:                                                    # not enough -> feedback only, NO switch
+            - if:
+                condition: { lambda: 'return id(game_tier) == 1;' }
+                then: [ light.turn_on: { id: onboard_led, red: 0%, green: 25%, blue: 100%, transition_length: 0s } ]   # frío
+                else:
+                  - if:
+                      condition: { lambda: 'return id(game_tier) == 2;' }
+                      then: [ light.turn_on: { id: onboard_led, red: 100%, green: 65%, blue: 0%, transition_length: 0s } ]  # tibio
+                      else: [ light.turn_on: { id: onboard_led, red: 100%, green: 10%, blue: 0%, transition_length: 0s } ]  # caliente
+      - component.update: lcd
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_led
+    pin: GPIO41
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true
+    restore_mode: ALWAYS_OFF
+  - platform: monochromatic
+    id: lcd_backlight
+    output: lcd_bl_output
+    internal: true
+    restore_mode: ALWAYS_ON
+
+output:
+  - platform: ledc
+    id: lcd_bl_output
+    pin: GPIO16
+
+switch:
+  - platform: gpio
+    id: relay
+    pin: GPIO5
+    restore_mode: ALWAYS_OFF
+
+globals:
+  - id: scene                      # 1 = relay ON (sun), 2 = relay OFF (moon)
+    type: int
+    restore_value: no
+    initial_value: '2'
+  - id: game_prob                  # last detection probability 0..1
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: game_tier                  # 0 none, 1 frío, 2 tibio, 3 caliente, 4 win
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: win_thresh                 # per-word win bar (set per detection; buenas is weaker -> lower)
+    type: float
+    restore_value: no
+    initial_value: '0.5'
+
+spi:
+  clk_pin: GPIO17
+  mosi_pin: GPIO21
+
+display:
+  - platform: ili9xxx
+    model: ST7789V
+    id: lcd
+    cs_pin: GPIO15
+    dc_pin: GPIO14
+    dimensions: 240x240
+    invert_colors: true
+    data_rate: 40MHz
+    update_interval: never
+    lambda: |-
+      auto BG_ON  = Color(0xFF, 0xC0, 0x00);   // warm yellow (relay ON)
+      auto SUN    = Color(0xFF, 0x70, 0x00);   // orange
+      auto BG_OFF = Color(0x0A, 0x12, 0x40);   // night navy (relay OFF)
+      auto MOON   = Color(0xF2, 0xF2, 0xDA);   // pale
+      auto WHITE  = Color(0xFF, 0xFF, 0xFF);
+
+      // ---- full-screen scene = relay state (like the original aivox3.yaml) ----
+      // shifted right (cx=146) to leave room for the side thermometer.
+      int cx = 146;
+      if (id(scene) == 1) {                       // ON -> sun on yellow
+        it.fill(BG_ON);
+        it.filled_circle(cx, 120, 40, SUN);
+        for (int a = 0; a < 360; a += 45) {
+          float r = a * 0.01745329f;
+          it.line(cx + (int)(cosf(r) * 54), 120 + (int)(sinf(r) * 54),
+                  cx + (int)(cosf(r) * 76), 120 + (int)(sinf(r) * 76), SUN);
+        }
+      } else {                                    // OFF -> crescent moon + stars on navy
+        it.fill(BG_OFF);
+        it.filled_circle(cx, 118, 46, MOON);
+        it.filled_circle(cx + 24, 100, 42, BG_OFF);   // carve the crescent
+        it.filled_circle(cx - 34, 44, 2, MOON);       // stars
+        it.filled_circle(cx + 46, 64, 3, MOON);
+        it.filled_circle(cx + 30, 188, 2, MOON);
+        it.filled_circle(cx - 6, 206, 2, MOON);
+      }
+
+      // ---- small side thermometer (left edge) = game progress ----
+      Color fill;
+      switch (id(game_tier)) {
+        case 1: fill = Color(0x20, 0x60, 0xFF); break;   // frío
+        case 2: fill = Color(0xFF, 0xC0, 0x00); break;   // tibio
+        case 3: fill = Color(0xFF, 0x40, 0x00); break;   // caliente
+        case 4: fill = Color(0x00, 0xFF, 0x00); break;   // win
+        default: fill = Color(0x60, 0x60, 0x60); break;  // idle
+      }
+      int tx = 14, tw = 16, ttop = 46, tbot = 182, th = tbot - ttop;
+      it.filled_rectangle(4, 34, 36, 178, Color(0x00, 0x00, 0x00));   // black panel so the gauge is readable on the yellow bg
+      float w = id(win_thresh); if (w < 0.05f) w = 0.5f;
+      float frac = (id(game_prob) / w) * 0.85f;            // win maps to 85% (leaves room for the line)
+      if (frac < 0.0f) frac = 0.0f; if (frac > 1.0f) frac = 1.0f;
+      int level = tbot - (int)(th * frac);
+      it.rectangle(tx, ttop, tw, th, WHITE);                          // tube
+      it.filled_rectangle(tx + 2, level, tw - 4, tbot - level, fill); // mercury
+      int win_y = tbot - (int)(th * 0.85f);                           // WIN line
+      it.line(tx - 4, win_y, tx + tw + 4, win_y, Color(0xFF, 0x20, 0x20));
+      it.filled_circle(tx + tw / 2, tbot + 12, 11, fill);            // bulb
+      it.circle(tx + tw / 2, tbot + 12, 11, WHITE);

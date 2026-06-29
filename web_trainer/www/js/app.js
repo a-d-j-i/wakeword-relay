@@ -1,5 +1,10 @@
 'use strict';
 
+// ── Secure-context warning ────────────────────────────────────────────────────
+if (!window.isSecureContext) {
+    document.getElementById('ssl-warning').style.display = 'block';
+}
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -154,6 +159,9 @@ btnLoad.addEventListener('click', async () => {
             (voiceConfig.num_speakers ?? 1) + ' speaker(s)', 'ok');
         btnGenerate.disabled = false;
         updatePrereqs();
+        updatePreviewModelStatus();
+        _applyModelToUI(voiceConfig);
+        piperCacheSave(modelBuf, configText).catch(e => console.warn('piper cache save:', e));
     } catch (e) {
         loadSetStatus('Error: ' + e.message, 'err');
         btnLoad.disabled = false;
@@ -481,6 +489,226 @@ noiseClearBtn.addEventListener('click', async () => {
 
 noiseSetup();
 
+// ── Piper model OPFS cache ────────────────────────────────────────────────────
+
+const ttsCachedRow     = document.getElementById('tts-cached-row');
+const ttsCacheStatus   = document.getElementById('tts-cache-status');
+const ttsCacheClearBtn = document.getElementById('tts-cache-clear-btn');
+
+function _applyModelToUI(cfg) {
+    const label = `✓ Cached: ${cfg.audio.sample_rate} Hz, ${cfg.num_speakers ?? 1} speaker(s)`;
+    ttsCacheStatus.textContent = label;
+    ttsCachedRow.style.display = '';
+}
+
+ttsCacheClearBtn.addEventListener('click', async () => {
+    await piperCacheClear();
+    ttsCachedRow.style.display = 'none';
+});
+
+// Auto-load model from OPFS on startup.
+(async () => {
+    try {
+        if (!(await piperCacheHas())) return;
+        const { onnxBuf, configText } = await piperCacheLoad();
+        voiceConfig  = JSON.parse(configText);
+        modelBlobUrl = URL.createObjectURL(new Blob([onnxBuf]));
+        loadSetStatus('✓ Model loaded from cache — ' + voiceConfig.audio.sample_rate + ' Hz', 'ok');
+        btnGenerate.disabled = false;
+        updatePrereqs();
+        updatePreviewModelStatus();
+        _applyModelToUI(voiceConfig);
+    } catch (e) {
+        console.warn('piper cache load:', e);
+    }
+})();
+
+// ── In-browser negative generation ───────────────────────────────────────────
+
+const negGenBtn      = document.getElementById('neg-gen-btn');
+const negGenCount    = document.getElementById('neg-gen-count');
+const negGenLang     = document.getElementById('neg-gen-lang');
+const negGenProgress = document.getElementById('neg-gen-progress');
+const negGenStatus   = document.getElementById('neg-gen-status');
+
+// Diverse phrases that are NOT the wake word, covering varied phoneme patterns.
+const _NEG_PHRASES_EN = [
+    'what time is it', 'how are you doing today', "what's the weather like",
+    'can you help me with something', 'turn on the lights', 'turn off the television',
+    'set a timer for five minutes', 'play some music please', 'increase the volume',
+    'good morning everyone', "I'll be back in a minute", 'thank you very much',
+    'the weather looks nice today', "let's have dinner at seven", "I'm running a bit late",
+    'one two three four five six seven eight nine ten',
+    'the meeting is on Thursday at three o clock',
+    'did you remember to charge your phone', 'we should go for a walk later',
+    'I think it is going to rain tomorrow', 'we need to buy more coffee',
+    'did you watch the game last night', 'the kids want pizza for dinner',
+    'hello how are you', 'goodbye see you later', 'yes of course', 'no thank you',
+    'okay sounds good', 'sure why not', 'never mind forget it', 'just a second',
+    'I was just thinking about what to have for lunch',
+    'the traffic was terrible this morning',
+    'the project deadline has been moved to next Friday',
+    'can someone please pass the salt',
+    'I have a doctor appointment tomorrow morning',
+];
+const _NEG_PHRASES_ES = [
+    'buenos días cómo estás', 'buenas tardes qué tal', 'buenas noches hasta mañana',
+    'muchas gracias de nada', 'por favor necesito ayuda', 'qué hora es ahora mismo',
+    'cuántos años tienes', 'dónde está el baño por favor', 'está bien perfecto',
+    'hasta luego nos vemos mañana', 'uno dos tres cuatro cinco seis siete',
+    'el tiempo está muy bonito hoy', 'vamos a cenar a las ocho',
+    'puedes ayudarme con algo', 'enciende las luces de la sala',
+    'apaga la televisión por favor', 'pon música suave de fondo',
+    'necesito un vaso de agua', 'qué hay de comer hoy',
+    'tengo una reunión a las tres de la tarde',
+    'el tráfico estaba terrible esta mañana',
+    'no te olvides de tomar tu medicina',
+    'cuánto tiempo tardará esto', 'puedes repetir eso por favor',
+    'me parece muy buena idea', 'qué película vemos esta noche',
+];
+
+function _negGenSetStatus(text, cls) {
+    negGenStatus.textContent = text;
+    negGenStatus.className   = 'status' + (cls ? ' ' + cls : '');
+}
+
+// Pad or crop a Uint16Array spectrogram to exactly targetT × numFeats frames.
+function _padSpec(features, T, targetT = 160, numFeats = 40) {
+    const out   = new Uint16Array(targetT * numFeats);
+    const copyT = Math.min(T, targetT);
+    out.set(features.subarray(0, copyT * numFeats));
+    return out;
+}
+
+// Generate a silence+noise clip at 16 kHz and return its Uint16 spectrogram.
+function _silenceSpec(durationMs, noiseAmp = 0.005) {
+    const n       = Math.round(16000 * durationMs / 1000);
+    const samples = new Float32Array(n);
+    for (let i = 0; i < n; i++)
+        samples[i] = (Math.random() * 2 - 1) * noiseAmp;
+    const res = audioToSpectrogram(samples, 16000);
+    return res ? _padSpec(res.features, res.T) : new Uint16Array(160 * 40);
+}
+
+negGenBtn.addEventListener('click', async () => {
+    if (!modelBlobUrl || !voiceConfig) {
+        _negGenSetStatus('Load a Piper model in the TTS tab first.', 'err');
+        return;
+    }
+    if (!window.webTrainerReady) {
+        _negGenSetStatus('WASM not ready yet — try again in a moment.', 'err');
+        return;
+    }
+
+    negGenBtn.disabled = true;
+    negGenProgress.style.display = '';
+    _negGenSetStatus('Generating…');
+
+    if (!negDB) negDB = await negOpenDB();
+
+    const N      = Math.max(20, parseInt(negGenCount.value) || 150);
+    const lang   = negGenLang.value;
+    const phrases = lang === 'es' ? _NEG_PHRASES_ES : _NEG_PHRASES_EN;
+
+    // How many TTS samples we need (speech + dinner_party share the same synthesised audio).
+    const ttsNeeded    = N * 2;  // half for speech, half repurposed for dinner_party
+    const perPhrase    = Math.max(1, Math.ceil(ttsNeeded / phrases.length));
+    const totalSteps   = phrases.length + N;  // TTS phrases + no_speech clips
+    let   stepsDone    = 0;
+
+    function _tick(label) {
+        stepsDone++;
+        negGenProgress.max   = totalSteps;
+        negGenProgress.value = stepsDone;
+        _negGenSetStatus(label);
+    }
+
+    try {
+        // ── 1. Synthesise speech audio ────────────────────────────────────────
+        const allSpeechSpecs    = [];  // Uint16Array[160*40]
+        const allDinnerSpecs    = [];  // speech + noise overlay
+
+        for (let pi = 0; pi < phrases.length; pi++) {
+            const phrase  = phrases[pi];
+            const samples = await generateSamples(
+                modelBlobUrl, voiceConfig, phrase, lang, perPhrase, null);
+
+            for (const s of samples) {
+                const buf  = await s.wav.arrayBuffer();
+                const wav  = loadWav(buf);
+                // Resample to 16 kHz
+                const r    = wav.sampleRate / 16000;
+                const n16  = Math.round(wav.samples.length / r);
+                const s16k = new Float32Array(n16);
+                for (let i = 0; i < n16; i++) {
+                    const pos = i * r;
+                    const i0  = Math.floor(pos);
+                    const i1  = Math.min(i0 + 1, wav.samples.length - 1);
+                    s16k[i]   = wav.samples[i0] * (1 - (pos - i0)) + wav.samples[i1] * (pos - i0);
+                }
+
+                // speech: clean spectrogram
+                const res = audioToSpectrogram(s16k, 16000);
+                if (res) allSpeechSpecs.push(_padSpec(res.features, res.T));
+
+                // dinner_party: same audio + white noise overlay (SNR ~5 dB)
+                const noisy = s16k.slice();
+                const amp   = 0.03 + Math.random() * 0.07;
+                for (let i = 0; i < noisy.length; i++)
+                    noisy[i] += (Math.random() * 2 - 1) * amp;
+                const res2 = audioToSpectrogram(noisy, 16000);
+                if (res2) allDinnerSpecs.push(_padSpec(res2.features, res2.T));
+            }
+
+            _tick(`Synthesising phrase ${pi + 1} / ${phrases.length}…`);
+        }
+
+        // ── 2. Silence clips for no_speech ────────────────────────────────────
+        const allSilenceSpecs = [];
+        for (let i = 0; i < N; i++) {
+            const ms  = 500 + Math.random() * 2000;  // 0.5 – 2.5 s
+            const amp = 0.001 + Math.random() * 0.015;
+            allSilenceSpecs.push(_silenceSpec(ms, amp));
+            if (i % 20 === 0) _tick(`Generating silence ${i + 1} / ${N}…`);
+        }
+
+        // ── 3. Trim to N samples each ─────────────────────────────────────────
+        const speechData  = _packSpecs(allSpeechSpecs.slice(0, N));
+        const dinnerData  = _packSpecs(allDinnerSpecs.slice(0, N));
+        const silenceData = _packSpecs(allSilenceSpecs.slice(0, N));
+
+        // ── 4. Store in IndexedDB ─────────────────────────────────────────────
+        _negGenSetStatus('Saving to cache…');
+        await negStore(negDB, {
+            categories: {
+                speech:       { numSamples: speechData.n,  numFrames: 160, numFeatures: 40, data: speechData.buf },
+                dinner_party: { numSamples: dinnerData.n,  numFrames: 160, numFeatures: 40, data: dinnerData.buf },
+                no_speech:    { numSamples: silenceData.n, numFrames: 160, numFeatures: 40, data: silenceData.buf },
+            },
+        });
+        negCats = await negLoad(negDB);
+        negSetStatus(`Generated: ${speechData.n} speech · ${dinnerData.n} dinner_party · ${silenceData.n} no_speech`, 'ok');
+        negBadge.textContent = 'cached';
+        negClearBtn.style.display = '';
+        updatePrereqs();
+        _negGenSetStatus(`Done — ${speechData.n + dinnerData.n + silenceData.n} spectrograms stored.`, 'ok');
+    } catch (err) {
+        _negGenSetStatus('Error: ' + err.message, 'err');
+        console.error(err);
+    } finally {
+        negGenBtn.disabled           = false;
+        negGenProgress.style.display = 'none';
+    }
+});
+
+// Pack an array of Uint16Array[160*40] into one flat Uint16Array.
+function _packSpecs(specs) {
+    const n   = specs.length;
+    const buf = new Uint16Array(n * 160 * 40);
+    for (let i = 0; i < n; i++) buf.set(specs[i], i * 160 * 40);
+    return { n, buf };
+}
+
 // ── Augment tab ───────────────────────────────────────────────────────────────
 
 augRunBtn.addEventListener('click', async () => {
@@ -490,11 +718,12 @@ augRunBtn.addEventListener('click', async () => {
 
     try {
         const irs = reverbSelect.value !== 'none' ? await ensureIRs() : [];
-        const selectedIR = reverbSelect.value === 'all'
-            ? irs
-            : reverbSelect.value !== 'none'
-                ? [irs[parseInt(reverbSelect.value)] || irs[0]]
-                : [];
+        const selectedIR = irs.length === 0 ? []
+            : reverbSelect.value === 'all'
+                ? irs
+                : reverbSelect.value !== 'none'
+                    ? [irs[parseInt(reverbSelect.value)] ?? irs[0]]
+                    : [];
 
         // Resample to 16kHz for augmentation
         const s16k = audioToSpectrogram !== null
@@ -549,12 +778,11 @@ augRunBtn.addEventListener('click', async () => {
 
 // ── Train tab — training loop ─────────────────────────────────────────────────
 
-let _trainNet       = null;   // WASM MixedNet pointer
-let _trainAdam      = null;   // WASM Adam pointer
-let _trainMinFrames = 157;    // minFrames for current net (pooled=1→157, pooled=0→204)
-let _posWavs        = [];     // decoded positive samples: { samples: Float32Array, sampleRate }[]
-let _lossHistory    = [];     // per-step smoothed loss values (for chart)
-let _abortFlag      = false;
+let _posWavs       = [];     // decoded positive samples: { samples: Float32Array, sampleRate }[]
+let _recordedWavs  = [];     // mic-recorded positive samples added via Record tab
+let _lossHistory   = [];     // per-step loss values accumulated from worker progress messages
+let _trainedParams = null;   // Float32Array of model weights, received from worker after training
+let _trainWorker   = null;   // Web Worker running the training loop
 
 const trainStartBtn   = document.getElementById('train-start-btn');
 const trainStopBtn    = document.getElementById('train-stop-btn');
@@ -633,6 +861,9 @@ trainPrepareBtn.addEventListener('click', async () => {
         return;
     }
 
+    if (_trainWorker) { _trainWorker.terminate(); _trainWorker = null; }
+    _trainedParams = null;
+
     trainPrepareBtn.disabled = true;
     trainStartBtn.disabled   = true;
     trainProgress.style.display = '';
@@ -678,129 +909,95 @@ trainPrepareBtn.addEventListener('click', async () => {
 
 // ── Training loop ─────────────────────────────────────────────────────────────
 
-const _NEG_CATS = ['speech', 'no_speech', 'dinner_party'];
-
-function _resample(samples, srcRate) {
-    if (srcRate === 16000) return samples;
-    const r = srcRate / 16000;
-    const n = Math.round(samples.length / r);
-    const out = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-        const pos = i * r;
-        const i0  = Math.floor(pos);
-        const i1  = Math.min(i0 + 1, samples.length - 1);
-        out[i] = samples[i0] * (1 - (pos - i0)) + samples[i1] * (pos - i0);
-    }
-    return out;
-}
-
-trainStartBtn.addEventListener('click', async () => {
-    if (_posWavs.length === 0 || !negCats) return;
+trainStartBtn.addEventListener('click', () => {
+    const _allPosWavs = [..._posWavs, ..._recordedWavs];
+    if (_allPosWavs.length === 0 || !negCats) return;
 
     const numSteps  = Math.max(1, parseInt(trainStepsIn.value)  || 1000);
     const negPerPos = Math.max(1, parseInt(trainNegRatio.value) || 5);
     const lr        = parseFloat(trainLrIn.value) || 1e-3;
     const pooled    = trainArchSel ? parseInt(trainArchSel.value) : 1;
 
-    // Reset state
-    if (_trainNet) trainDestroy(_trainNet, _trainAdam);
-    _lossHistory = [];
-    _abortFlag   = false;
+    // Terminate any prior worker before starting a new run.
+    if (_trainWorker) { _trainWorker.terminate(); _trainWorker = null; }
+    _lossHistory   = [];
+    _trainedParams = null;
 
-    const { net, adam, minFrames } = trainCreate(lr, pooled);
-    _trainNet = net; _trainAdam = adam; _trainMinFrames = minFrames;
-
-    trainStartBtn.disabled  = true;
+    trainStartBtn.disabled   = true;
     trainPrepareBtn.disabled = true;
-    trainStopBtn.disabled   = false;
-    trainExportBtn.disabled = false;
-    trainTfliteBtn.disabled = false;
+    trainStopBtn.disabled    = false;
+    trainExportBtn.disabled  = true;
+    trainTfliteBtn.disabled  = true;
     trainProgress.style.display = '';
     trainProgress.value = 0;
     trainProgress.max   = numSteps;
     trainLossWrap.style.display = '';
 
-    let _skipCount = 0;
-    for (let step = 0; step < numSteps && !_abortFlag; step++) {
-        try {
-        // Positive step
-        const wav  = _posWavs[Math.floor(Math.random() * _posWavs.length)];
-        const s16k = _resample(wav.samples, wav.sampleRate);
-        if (s16k.length > 80000) { console.warn(`skip overlong sample: ${s16k.length} samples`); continue; }
-        const aug  = augmentSample(s16k, 16000, {
-            irs:        loadedIRs || [],
-            noises:     noiseParsed ? [noiseGetSample(noiseParsed)] : [],
-            pitchProb:  0.5,
-            eqProb:     0.5,
-            reverbProb: loadedIRs && loadedIRs.length > 0 ? 0.5 : 0.0,
-            noiseProb:  noiseParsed ? 0.75 : 0.0,
-            gainRange:  [-45, 0],
-        });
-        window._dbgAugLen = aug.length;
-        const feat = audioToFloat32Spec(aug, 16000, _trainMinFrames);
-        if (!feat) continue;
+    _trainWorker = new Worker('js/train_worker.js');
 
-        const posLoss = trainStep(_trainNet, _trainAdam, feat.spectrogram, feat.T, 1.0);
+    _trainWorker.onmessage = (e) => {
+        const d = e.data;
 
-        // Negative steps
-        let negLossSum = 0;
-        for (let j = 0; j < negPerPos; j++) {
-            const cat     = _NEG_CATS[Math.floor(Math.random() * _NEG_CATS.length)];
-            let   spec    = negGetSample(negCats, cat);  // Float32Array(160×40), already scaled
-            let   negT    = 160;
-            // pooled=0 needs exactly minFrames=204; zero-pad if needed
-            if (_trainMinFrames > negT) {
-                const padded = new Float32Array(_trainMinFrames * 40);
-                padded.set(spec);
-                spec = padded;
-                negT = _trainMinFrames;
-            }
-            negLossSum += trainStep(_trainNet, _trainAdam, spec, negT, 0.0);
-        }
-
-        _lossHistory.push((posLoss + negLossSum / negPerPos) / 2);
-        } catch (e) {
-            _skipCount++;
-            console.error(`Training step ${step} skipped (${e.message}). T=${window._dbgT}, aug.len=${window._dbgAugLen}`);
-            continue;
-        }
-
-        if (step % 10 === 0) {
-            trainProgress.value = step + 1;
-            const loss = _lossHistory[_lossHistory.length - 1];
-            trainStatus.textContent = `Step ${step + 1} / ${numSteps} — loss ${loss.toFixed(4)}`;
+        if (d.type === 'progress') {
+            _lossHistory.push(...d.losses);
+            trainProgress.value = d.step;
+            const latest = _lossHistory[_lossHistory.length - 1];
+            trainStatus.textContent = `Step ${d.step} / ${d.numSteps} — loss ${latest.toFixed(4)}`;
             trainStatus.className = 'status';
             drawLossChart(trainLossCanvas, _smoothLoss(_lossHistory));
-            await new Promise(r => setTimeout(r, 0));
+            return;
         }
-    }
 
-    // Final chart
-    if (_lossHistory.length > 0) drawLossChart(trainLossCanvas, _smoothLoss(_lossHistory));
-    trainProgress.style.display = 'none';
-    trainStatus.textContent = _abortFlag
-        ? `Stopped at step ${_lossHistory.length} — loss ${_lossHistory[_lossHistory.length - 1]?.toFixed(4) ?? '?'}`
-        : `Training complete — ${_lossHistory.length} steps, final loss ${_lossHistory[_lossHistory.length - 1]?.toFixed(4) ?? '?'}`;
-    trainStatus.className = 'status ok';
-    trainStartBtn.disabled  = false;
-    trainPrepareBtn.disabled = false;
-    trainStopBtn.disabled   = true;
+        if (d.type === 'done') {
+            _trainedParams = d.params;
+            if (_lossHistory.length > 0) drawLossChart(trainLossCanvas, _smoothLoss(_lossHistory));
+            trainProgress.style.display = 'none';
+            const finalLoss = _lossHistory[_lossHistory.length - 1]?.toFixed(4) ?? '?';
+            trainStatus.textContent = d.stopped
+                ? `Stopped at step ${_lossHistory.length} — loss ${finalLoss}`
+                : `Training complete — ${_lossHistory.length} steps, final loss ${finalLoss}`;
+            trainStatus.className    = 'status ok';
+            trainStartBtn.disabled   = false;
+            trainPrepareBtn.disabled = false;
+            trainStopBtn.disabled    = true;
+            trainExportBtn.disabled  = false;
+            trainTfliteBtn.disabled  = false;
+        }
+    };
+
+    _trainWorker.onerror = (e) => {
+        trainStatus.textContent  = 'Worker error: ' + e.message;
+        trainStatus.className    = 'status err';
+        trainStartBtn.disabled   = false;
+        trainPrepareBtn.disabled = false;
+        trainStopBtn.disabled    = true;
+    };
+
+    _trainWorker.postMessage({
+        type:        'train',
+        posWavs:     _allPosWavs,
+        negCats,
+        noiseParsed,
+        irs:         loadedIRs || [],
+        numSteps,
+        negPerPos,
+        lr,
+        pooled,
+    });
 });
 
-trainStopBtn.addEventListener('click', () => { _abortFlag = true; });
+trainStopBtn.addEventListener('click', () => { _trainWorker?.postMessage({ type: 'stop' }); });
 
 // ── Export weights ────────────────────────────────────────────────────────────
 
 trainExportBtn.addEventListener('click', () => {
-    if (!_trainNet) return;
+    if (!_trainedParams) return;
 
-    const params = trainGetParams(_trainNet);
-
-    // Bundle format: magic "MWWW" + uint32 num_params + float32[] weights
-    const buf = new ArrayBuffer(8 + params.byteLength);
-    const dv  = new DataView(buf);
-    dv.setUint8(0, 0x4D); dv.setUint8(1, 0x57);   // "MW"
-    dv.setUint8(2, 0x57); dv.setUint8(3, 0x57);   // "WW"
+    const params = _trainedParams;
+    const buf    = new ArrayBuffer(8 + params.byteLength);
+    const dv     = new DataView(buf);
+    dv.setUint8(0, 0x4D); dv.setUint8(1, 0x57);
+    dv.setUint8(2, 0x57); dv.setUint8(3, 0x57);
     dv.setUint32(4, params.length, true);
     new Float32Array(buf, 8).set(params);
 
@@ -814,35 +1011,379 @@ trainExportBtn.addEventListener('click', () => {
 // ── Export TFLite ─────────────────────────────────────────────────────────────
 
 trainTfliteBtn.addEventListener('click', async () => {
-    if (!_trainNet) return;
+    if (!_trainWorker || !_trainedParams) return;
 
     trainTfliteBtn.disabled = true;
     trainStatus.textContent = 'Exporting TFLite… (calibrating INT8 quantization)';
-    trainStatus.className = 'status';
+    trainStatus.className   = 'status';
 
     try {
         const resp = await fetch('tflite_template.bin');
         if (!resp.ok) throw new Error(`Template fetch failed: ${resp.status}`);
         const tmplBytes = new Uint8Array(await resp.arrayBuffer());
 
-        // Run in next microtask so the status text renders first
-        await new Promise(r => setTimeout(r, 0));
+        const tfliteBytes = await new Promise((resolve, reject) => {
+            const h = (ev) => {
+                if (ev.data.type === 'tflite') {
+                    _trainWorker.removeEventListener('message', h);
+                    resolve(ev.data.bytes);
+                } else if (ev.data.type === 'tflite_error') {
+                    _trainWorker.removeEventListener('message', h);
+                    reject(new Error(ev.data.message));
+                }
+            };
+            _trainWorker.addEventListener('message', h);
+            _trainWorker.postMessage(
+                { type: 'export_tflite', templateBytes: tmplBytes, calibN: 500 },
+                [tmplBytes.buffer]
+            );
+        });
 
-        const tflite = trainExportTFLite(_trainNet, tmplBytes, 500);
-        if (!tflite) throw new Error('Export returned null (check console)');
-
-        const blob = new Blob([tflite], { type: 'application/octet-stream' });
+        const blob = new Blob([tfliteBytes], { type: 'application/octet-stream' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href = url; a.download = 'wakeword.tflite'; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
 
-        trainStatus.textContent = `TFLite exported (${(tflite.byteLength / 1024).toFixed(1)} KB)`;
-        trainStatus.className = 'status ok';
+        try { await tfliteCacheSave(tfliteBytes); } catch(e) { console.warn('tflite cache save:', e); }
+
+        trainStatus.textContent = `TFLite exported (${(tfliteBytes.byteLength / 1024).toFixed(1)} KB) — available on Test tab`;
+        trainStatus.className   = 'status ok';
     } catch (e) {
         trainStatus.textContent = 'TFLite export failed: ' + e.message;
-        trainStatus.className = 'status err';
+        trainStatus.className   = 'status err';
     } finally {
         trainTfliteBtn.disabled = false;
     }
+});
+
+// ── Preview tab ───────────────────────────────────────────────────────────────
+
+const prevPhrase     = document.getElementById('prev-phrase');
+const prevLang       = document.getElementById('prev-lang');
+const prevCount      = document.getElementById('prev-count');
+const prevGenBtn     = document.getElementById('prev-gen-btn');
+const prevStatus     = document.getElementById('prev-status');
+const prevProgress   = document.getElementById('prev-progress');
+const prevResults    = document.getElementById('prev-results');
+const prevModelStat  = document.getElementById('prev-model-status');
+const prevPitchProb  = document.getElementById('prev-pitch-prob');
+const prevPitchSt    = document.getElementById('prev-pitch-st');
+const prevReverbProb = document.getElementById('prev-reverb-prob');
+const prevNoiseProb  = document.getElementById('prev-noise-prob');
+const prevSnrMin     = document.getElementById('prev-snr-min');
+const prevEq         = document.getElementById('prev-eq');
+
+[
+    [prevPitchProb,  document.getElementById('prev-pitch-prob-val')],
+    [prevPitchSt,    document.getElementById('prev-pitch-st-val')],
+    [prevReverbProb, document.getElementById('prev-reverb-prob-val')],
+    [prevNoiseProb,  document.getElementById('prev-noise-prob-val')],
+    [prevSnrMin,     document.getElementById('prev-snr-min-val')],
+].forEach(([el, out]) => el.addEventListener('input', () => { out.textContent = el.value; }));
+
+function updatePreviewModelStatus() {
+    if (modelBlobUrl) {
+        const sr = voiceConfig?.audio?.sample_rate ?? '?';
+        prevModelStat.textContent = `✓ Model ready — ${sr} Hz`;
+        prevModelStat.className   = 'status ok';
+        prevGenBtn.disabled       = false;
+    } else {
+        prevModelStat.textContent = 'No model loaded — go to the TTS tab first.';
+        prevModelStat.className   = 'status';
+        prevGenBtn.disabled       = true;
+    }
+}
+
+prevGenBtn.addEventListener('click', async () => {
+    if (!modelBlobUrl || !voiceConfig) return;
+
+    prevGenBtn.disabled      = true;
+    prevResults.innerHTML    = '';
+    prevStatus.textContent   = '';
+    prevStatus.className     = 'status';
+    prevProgress.style.display = '';
+    prevProgress.value = 0;
+
+    const phrase     = prevPhrase.value.trim() || 'hey lumus';
+    const lang       = prevLang.value;
+    const count      = Math.max(1, parseInt(prevCount.value) || 8);
+    const pitchProb  = parseFloat(prevPitchProb.value);
+    const pitchSt    = parseFloat(prevPitchSt.value);
+    const reverbProb = parseFloat(prevReverbProb.value);
+    const noiseProb  = parseFloat(prevNoiseProb.value);
+    const snrMin     = parseFloat(prevSnrMin.value);
+    const eqProb     = prevEq.checked ? 0.5 : 0.0;
+
+    try {
+        let irs = loadedIRs || [];
+        if (reverbProb > 0 && irs.length === 0) irs = await ensureIRs();
+
+        prevProgress.max = count;
+        prevStatus.textContent = 'Generating TTS…';
+
+        const samples = await generateSamples(
+            modelBlobUrl, voiceConfig, phrase, lang, count,
+            (done, total) => {
+                prevProgress.value = done;
+                prevStatus.textContent = `Generating TTS… ${done} / ${total}`;
+            }
+        );
+
+        prevStatus.textContent = 'Augmenting…';
+
+        for (let i = 0; i < samples.length; i++) {
+            const s   = samples[i];
+            const buf = await s.wav.arrayBuffer();
+            const wav = loadWav(buf);
+
+            // Resample to 16 kHz
+            const ratio = wav.sampleRate / 16000;
+            const n16   = Math.round(wav.samples.length / ratio);
+            const s16k  = new Float32Array(n16);
+            for (let j = 0; j < n16; j++) {
+                const pos = j * ratio;
+                const i0  = Math.floor(pos);
+                const i1  = Math.min(i0 + 1, wav.samples.length - 1);
+                s16k[j] = wav.samples[i0] * (1 - (pos - i0)) + wav.samples[i1] * (pos - i0);
+            }
+
+            const aug = augmentSample(s16k, 16000, {
+                irs,
+                noises:        noiseParsed ? [noiseGetSample(noiseParsed)] : [],
+                pitchProb,
+                eqProb,
+                reverbProb:    irs.length > 0 ? reverbProb : 0.0,
+                noiseProb:     noiseParsed ? noiseProb : 0.0,
+                gainRange:     [-45, 0],
+                semitoneRange: [-pitchSt, pitchSt],
+                snrRange:      [snrMin, 10],
+            });
+
+            const url  = URL.createObjectURL(encodeWav(aug, 16000));
+            const card = document.createElement('div');
+            card.className = 'prev-card';
+            card.innerHTML =
+                `<div class="prev-card-top">` +
+                `<span class="sample-num">${i + 1}</span>` +
+                `<audio controls src="${url}" style="height:28px;flex:1"></audio>` +
+                `<span class="sample-params">` +
+                    `noise=${s.noiseScale.toFixed(2)} ` +
+                    `speed=${s.lengthScale.toFixed(2)} ` +
+                    `pitch=${s.noiseW.toFixed(2)}` +
+                `</span>` +
+                `<a href="${url}" download="preview_${i + 1}.wav">↓</a>` +
+                `</div>`;
+
+            const res = audioToSpectrogram(aug, 16000);
+            if (res) {
+                const canvas = document.createElement('canvas');
+                canvas.className = 'spectrogram';
+                const wrap = document.createElement('div');
+                wrap.className = 'spec-wrap';
+                wrap.appendChild(canvas);
+                card.appendChild(wrap);
+                drawSpectrogram(canvas, res.features, res.T);
+            }
+            prevResults.appendChild(card);
+        }
+
+        prevStatus.textContent = `${samples.length} samples generated and augmented.`;
+        prevStatus.className   = 'status ok';
+    } catch (err) {
+        prevStatus.textContent = 'Error: ' + err.message;
+        prevStatus.className   = 'status err';
+        console.error(err);
+    } finally {
+        prevGenBtn.disabled        = false;
+        prevProgress.style.display = 'none';
+    }
+});
+
+// ── Record tab ────────────────────────────────────────────────────────────────
+
+const recStartBtn   = document.getElementById('rec-start-btn');
+const recStopBtn    = document.getElementById('rec-stop-btn');
+const recClearBtn   = document.getElementById('rec-clear-btn');
+const recTimer      = document.getElementById('rec-timer');
+const recPreview    = document.getElementById('rec-preview');
+const recAudio      = document.getElementById('rec-audio');
+const recSpecWrap   = document.getElementById('rec-spec-wrap');
+const recCanvas     = document.getElementById('rec-canvas');
+const recAddBtn     = document.getElementById('rec-add-btn');
+const recAddStatus  = document.getElementById('rec-add-status');
+const recPoolBadge  = document.getElementById('rec-pool-badge');
+const recPoolStatus = document.getElementById('rec-pool-status');
+const recPoolList   = document.getElementById('rec-pool-list');
+
+let _mediaRecorder  = null;
+let _recChunks      = [];
+let _recTimerHandle = null;
+let _recStartTime   = 0;
+let _pendingWav     = null;   // { samples: Float32Array, sampleRate: 16000 } awaiting "Add"
+
+function _recUpdateTimer() {
+    const secs = ((Date.now() - _recStartTime) / 1000).toFixed(1);
+    recTimer.textContent = secs + ' s';
+}
+
+function _recUpdatePool() {
+    const n = _recordedWavs.length;
+    recPoolBadge.textContent  = String(n);
+    recPoolStatus.textContent = n === 0
+        ? 'No recordings yet. Recordings are merged with TTS-generated samples at training time.'
+        : `${n} recording${n > 1 ? 's' : ''} ready — will be merged with TTS samples at training start.`;
+    recPoolStatus.className   = n > 0 ? 'status ok' : 'status';
+    if (negCats) trainStartBtn.disabled = false;
+}
+
+recStartBtn.addEventListener('click', async () => {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        _recChunks     = [];
+        _mediaRecorder = new MediaRecorder(stream);
+
+        _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _recChunks.push(e.data); };
+
+        _mediaRecorder.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            clearInterval(_recTimerHandle);
+            recTimer.textContent = '';
+
+            try {
+                const blob = new Blob(_recChunks, { type: _mediaRecorder.mimeType });
+                const arrBuf = await blob.arrayBuffer();
+                const audioCtx = new AudioContext();
+                const decoded  = await audioCtx.decodeAudioData(arrBuf);
+                await audioCtx.close();
+
+                const srcRate = decoded.sampleRate;
+                const src     = decoded.getChannelData(0);   // mono; mix stereo if needed
+                if (decoded.numberOfChannels > 1) {
+                    const ch1 = decoded.getChannelData(1);
+                    for (let i = 0; i < src.length; i++) src[i] = (src[i] + ch1[i]) * 0.5;
+                }
+
+                // Resample to 16 kHz
+                const ratio = srcRate / 16000;
+                const n16   = Math.round(src.length / ratio);
+                const s16k  = new Float32Array(n16);
+                for (let i = 0; i < n16; i++) {
+                    const pos = i * ratio;
+                    const i0  = Math.floor(pos);
+                    const i1  = Math.min(i0 + 1, src.length - 1);
+                    s16k[i] = src[i0] * (1 - (pos - i0)) + src[i1] * (pos - i0);
+                }
+
+                _pendingWav = { samples: s16k, sampleRate: 16000 };
+
+                recAudio.src = URL.createObjectURL(encodeWav(s16k, 16000));
+                recPreview.style.display = '';
+                recAddStatus.textContent = '';
+
+                const res = audioToSpectrogram(s16k, 16000);
+                if (res) {
+                    recSpecWrap.style.display = 'block';
+                    drawSpectrogram(recCanvas, res.features, res.T);
+                } else {
+                    recSpecWrap.style.display = 'none';
+                }
+            } catch (err) {
+                recAddStatus.textContent = 'Decode error: ' + err.message;
+                recAddStatus.className   = 'status err';
+                console.error(err);
+            }
+        };
+
+        _mediaRecorder.start(100);   // collect data every 100 ms
+        _recStartTime   = Date.now();
+        _recTimerHandle = setInterval(_recUpdateTimer, 100);
+
+        recStartBtn.disabled = true;
+        recStopBtn.disabled  = false;
+        recClearBtn.style.display = 'none';
+        recPreview.style.display  = 'none';
+    } catch (err) {
+        recAddStatus.textContent = 'Microphone error: ' + err.message;
+        recAddStatus.className   = 'status err';
+    }
+});
+
+recStopBtn.addEventListener('click', () => {
+    if (_mediaRecorder && _mediaRecorder.state !== 'inactive') _mediaRecorder.stop();
+    recStartBtn.disabled      = false;
+    recStopBtn.disabled       = true;
+    recClearBtn.style.display = '';
+});
+
+recClearBtn.addEventListener('click', () => {
+    _pendingWav               = null;
+    recPreview.style.display  = 'none';
+    recClearBtn.style.display = 'none';
+    recAddStatus.textContent  = '';
+});
+
+recAddBtn.addEventListener('click', () => {
+    if (!_pendingWav) return;
+
+    const idx = _recordedWavs.length + 1;
+    _recordedWavs.push(_pendingWav);
+    _pendingWav = null;
+
+    recAddStatus.textContent = `Added as recording #${idx}.`;
+    recAddStatus.className   = 'status ok';
+    recPreview.style.display = 'none';
+    recClearBtn.style.display = 'none';
+
+    // Add item to pool list
+    const dur  = (_recordedWavs[idx - 1].samples.length / 16000).toFixed(2);
+    const url  = recAudio.src;
+    const item = document.createElement('div');
+    item.className = 'rec-item';
+    item.dataset.idx = String(idx - 1);
+
+    const miniCanvas = document.createElement('canvas');
+    miniCanvas.className = 'spectrogram';
+
+    const rmBtn = document.createElement('button');
+    rmBtn.textContent = '✕';
+    rmBtn.className   = 'secondary';
+    rmBtn.style.cssText = 'padding:0.2rem 0.5rem;font-size:0.8rem';
+    rmBtn.addEventListener('click', () => {
+        const i = parseInt(item.dataset.idx);
+        _recordedWavs.splice(i, 1);
+        // Update indices for remaining items
+        [...recPoolList.querySelectorAll('.rec-item')].forEach((el, j) => {
+            el.dataset.idx = String(j);
+        });
+        item.remove();
+        _recUpdatePool();
+    });
+
+    const numSpan = document.createElement('span');
+    numSpan.className = 'sample-num';
+    numSpan.textContent = String(idx);
+
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = url;
+    audio.style.cssText = 'height:28px;flex:1';
+
+    const durSpan = document.createElement('span');
+    durSpan.className = 'sample-params';
+    durSpan.textContent = `${dur} s`;
+
+    item.appendChild(numSpan);
+    item.appendChild(audio);
+    item.appendChild(miniCanvas);
+    item.appendChild(durSpan);
+    item.appendChild(rmBtn);
+    recPoolList.appendChild(item);
+
+    // Draw mini spectrogram
+    const res = audioToSpectrogram(_recordedWavs[idx - 1].samples, 16000);
+    if (res) drawSpectrogram(miniCanvas, res.features, res.T);
+    else miniCanvas.style.display = 'none';
+
+    _recUpdatePool();
 });
