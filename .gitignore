@@ -12,6 +12,10 @@ __pycache__/
 
 # Secrets
 firmware/secrets.yaml
+firmware/**/secrets.yaml
+
+# Collected training samples (from tools/sample_server.py)
+samples/
 
 # web_trainer build output (build dirs only; www/ WASM outputs are committed)
 web_trainer/build/

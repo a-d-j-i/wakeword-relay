@@ -4,17 +4,42 @@
 # No speaker, no wake word — just: is the continuous mic path delivering audio?
 #   rms stays ~0 while talking  -> continuous capture is broken (mww won't work)
 #   rms jumps when you talk      -> mic path is fine -> wake-word issue is elsewhere
-# Tune mic_gain (0/6/12/18/24/30/36/42 DB) and watch how rms/peak scale.
+#
+# CLIP/SATURATION CHECK: each line also prints peak as % of full-scale and a
+# clip% (fraction of samples pinned at int16 max). If you see "<<< CLIPPING" or
+# clip% > 0 while speaking normally, the analog gain is too hot -> lower mic_gain.
+# Goal: speak at your normal distance/volume and keep peak well under 100% FS
+# (say <90%) with clip% = 0. Then use that mic_gain in aivox3.yaml.
+# Tune mic_gain (0/6/12/18/24/30/36/42 DB) and re-flash to compare.
 # Flash:  esphome run firmware/aivox3-micmon.yaml
 # =============================================================================
 
 esphome:
   name: aivox3-micmon
   on_boot:
-    priority: -100
-    then:
-      - microphone.capture: mic        # start capturing immediately and never stop
-      - logger.log: "mic capture started - talk and watch rms/peak"
+    - priority: -100
+      then:
+        - microphone.capture: mic      # start capturing immediately and never stop
+        - logger.log: "mic capture started - talk and watch rms/peak/clip"
+    # DYNAMIC GAIN (ES8311 ALC): runs at -200, after the es8311 component configured the
+    # codec. ALC raises gain on quiet/far speech and limits loud/close speech -> should
+    # LOWER clip% up close while boosting rms when far. Compare against a run with this
+    # block removed (pure static mic_gain). ALC is DIGITAL (post-PGA): if the analog
+    # mic_gain clips at the ADC, ALC can't un-clip it -> keep mic_gain moderate (24/30)
+    # and let ALC do the far-field boost. Remove/comment this block to A/B.
+    - priority: -200
+      then:
+        - lambda: |-
+            auto dev = id(bus_a);
+            const uint8_t addr = 0x18;                          // ES8311 I2C address
+            // 0x17 ADC_VOLUME = ALC max digital gain ceiling (0xBF≈0dB; raise toward
+            //      0xFF≈+32dB for MORE far-field boost)
+            { uint8_t v = 0xBF; dev->write(addr, (const uint8_t[]){0x17, v}, 2); }
+            // 0x19 ALC target window: maxlevel (7:4) / minlevel (3:0)
+            { uint8_t v = 0x77; dev->write(addr, (const uint8_t[]){0x19, v}, 2); }
+            // 0x18 ALC_EN=1 (bit7) + ADC_AUTOMUTE_EN=1 (bit6) -> 0xC0
+            { uint8_t v = 0xC0; dev->write(addr, (const uint8_t[]){0x18, v}, 2); }
+            ESP_LOGI("alc", "ES8311 ALC enabled (0x17=BF 0x19=77 0x18=C0)");
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -31,6 +56,7 @@ logger:
   hardware_uart: USB_SERIAL_JTAG
 
 i2c:
+  id: bus_a                        # id so the on_boot ALC lambda can write ES8311 registers
   sda: GPIO13
   scl: GPIO12
   frequency: 400kHz
@@ -50,7 +76,7 @@ audio_dac:
     bits_per_sample: 16bit
     use_mclk: true
     use_microphone: false
-    mic_gain: 12DB              # change this and re-flash to see the level scale
+    mic_gain: 36DB              # the value under test (matches aivox3.yaml); compare against 30DB
 
 microphone:
   - platform: i2s_audio
@@ -64,21 +90,29 @@ microphone:
     channel: left
     on_data:
       - lambda: |-
-          // Per-chunk peak/rms; throttle the log to ~4 lines/sec so it's readable.
+          // Per-chunk peak/rms + clip(saturation) detection; throttle ~4 lines/sec.
           int n = x.size() / 2;
           if (n <= 0) return;
-          int16_t pk = 0; long long sumsq = 0;
+          const int16_t CLIP = 32000;      // ~97.7% of int16 full-scale -> count as saturated
+          int16_t pk = 0; long long sumsq = 0; uint32_t clipped = 0;
           for (size_t i = 0; i + 1 < x.size(); i += 2) {
             int16_t s = (int16_t)(x[i] | (x[i + 1] << 8));
             int16_t a = s < 0 ? (int16_t)(-s) : s;
             if (a > pk) pk = a;
+            if (a >= CLIP) clipped++;
             sumsq += (long long) s * s;
           }
           float rms = sqrtf((float) sumsq / n);
-          static uint32_t acc_pk = 0, acc_rms = 0, cnt = 0, chunks = 0;
-          acc_pk = (pk > (int)acc_pk) ? pk : acc_pk;
-          acc_rms += (uint32_t) rms; cnt++; chunks++;
+          static uint32_t acc_pk = 0, cnt = 0, chunks = 0, acc_clip = 0, acc_samp = 0;
+          static double acc_rms = 0;
+          if (pk > (int)acc_pk) acc_pk = pk;
+          acc_rms += rms; cnt++; chunks++;
+          acc_clip += clipped; acc_samp += n;
           if (chunks >= 12) {              // ~ every 12 chunks
-            ESP_LOGI("mic", "peak=%u  rms=%u  (chunk n=%d)", acc_pk, acc_rms / cnt, n);
-            acc_pk = 0; acc_rms = 0; cnt = 0; chunks = 0;
+            float pk_fs   = 100.0f * acc_pk / 32767.0f;
+            float clip_pct = acc_samp ? (100.0f * acc_clip / acc_samp) : 0.0f;
+            const char* flag = (acc_pk >= CLIP) ? "  <<< CLIPPING" : "";
+            ESP_LOGI("mic", "peak=%u (%.0f%% FS)  rms=%.0f  clip=%.2f%%%s",
+                     acc_pk, pk_fs, acc_rms / cnt, clip_pct, flag);
+            acc_pk = 0; acc_rms = 0; cnt = 0; chunks = 0; acc_clip = 0; acc_samp = 0;
           }
