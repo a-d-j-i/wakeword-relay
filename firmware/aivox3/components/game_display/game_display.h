@@ -21,9 +21,12 @@ static constexpr int T_BR  = 13;                 // bulb radius
 static constexpr int TX2 = 192;  // 240 - TW - 4
 
 // WIN probability threshold. Tier bands below are frío/tibio/caliente/WIN.
-// turn_on  ("chispa mágica"): max~0.72, avg~0.46 — comfortable.
-// turn_off ("buenas noches"): max~0.50, avg~0.38 — limited by phrase commonness in negatives.
-static constexpr float WIN_THRESH = 0.35f;
+// Retuned 2026-07-11 after the fda slot_mask fix (audio was 2x slow before;
+// the old 0.35 threshold + 0.12-0.35 bands were calibrated against that broken
+// audio and made the game trivial once the mic came clean). Clean-mic reference:
+// casual utterances log avg 0.30-0.53, good ones higher. Raise/lower if WIN
+// is still too easy/hard — bands in the loop() tier ladder scale with this.
+static constexpr float WIN_THRESH = 0.45f;
 
 // GameDisplay — runs entirely on Core 0.
 //
@@ -59,9 +62,14 @@ class GameDisplay : public esphome::Component {
   uint16_t buf2_[TW * TH]{};
   uint16_t *cur_buf_{buf_};  // switched by push_mic_thermo_ so drawing primitives target buf2_
   int last_scene_{-1};
-  int last_tier_{0};   // for tier-rise tone gating
+  int last_tier_{0};    // for tier-rise tone gating
   bool was_win_{false};
+  int cooldown_{0};     // ticks to ignore prob after WIN (prevents fanfare from triggering opposite word)
   float peak_prob_{0.0f};  // peak-hold: decays slowly so thermometer stays up after speaking
+  int peak_hold_{0};       // ticks remaining before peak_prob_ starts decaying
+  float bonus_{0.0f};      // "getting warmer" streak: each caliente attempt banks +0.04 (cap 0.12)
+                           // onto the score, so insisting on the word closes the gap to WIN.
+  int idle_ticks_{0};      // consecutive idle ticks; long silence forfeits the bonus
 
   // ---- drawing primitives ------------------------------------------------
 
@@ -202,7 +210,7 @@ class GameDisplay : public esphome::Component {
   static void add_note_(std::vector<uint8_t> &buf, float freq, int samples) {
     for (int i = 0; i < samples; i++) {
       float env = (i < (int)(samples * 0.88f)) ? 1.0f : (float)(samples - i) / (samples * 0.12f);
-      int16_t s = (int16_t)(10000.0f * env * sinf(2.0f * 3.14159265f * freq * i / 16000.0f));
+      int16_t s = (int16_t)(4000.0f * env * sinf(2.0f * 3.14159265f * freq * i / 16000.0f));
       buf.push_back(s & 0xFF);
       buf.push_back((s >> 8) & 0xFF);
     }
@@ -257,37 +265,82 @@ class GameDisplay : public esphome::Component {
       vTaskDelay(pdMS_TO_TICKS(100));
 
       float prob = id(mww).get_max_probability();
-      // Peak-hold: rise instantly, decay 18% per 100ms → half-life ~350ms.
+      // Peak-hold: rise instantly, hold ~1.2s, then decay 10% per 100ms (half-life ~0.7s).
       // Without this, the thermometer flickers — the mww sliding window (2 frames, ~100ms)
       // goes back to zero as soon as speaking stops, so a single 100ms poll often misses the peak.
-      peak_prob_ = (prob > peak_prob_) ? prob : (peak_prob_ * 0.82f);
-      id(game_prob) = peak_prob_;
+      // The hold gives the player time to actually read their score off the bar.
+      if (prob > peak_prob_) {
+        peak_prob_ = prob;
+        peak_hold_ = 12;  // 12 × 100ms
+      } else if (peak_hold_ > 0) {
+        peak_hold_--;
+      } else {
+        peak_prob_ *= 0.90f;
+      }
+      // Score = current peak + streak bonus. The bar/LED show the score, so the
+      // player watches their banked progress build across attempts.
+      float score = peak_prob_ + bonus_;
+      if (score > 1.0f) score = 1.0f;
+      id(game_prob) = score;
 
       int tier;
-      if      (peak_prob_ >= WIN_THRESH) tier = 4;   // WIN    ≥ 0.35
-      else if (peak_prob_ >= 0.28f)      tier = 3;   // hot    0.28–0.35
-      else if (peak_prob_ >= 0.20f)      tier = 2;   // warm   0.20–0.28
-      else if (peak_prob_ >= 0.12f)      tier = 1;   // cold   0.12–0.20
-      else                               tier = 0;   // idle   < 0.12
+      if      (score >= WIN_THRESH) tier = 4;   // WIN    ≥ 0.45
+      else if (score >= 0.35f)      tier = 3;   // hot    0.35–0.45
+      else if (score >= 0.22f)      tier = 2;   // warm   0.22–0.35
+      else if (score >= 0.12f)      tier = 1;   // cold   0.12–0.22
+      else                          tier = 0;   // idle   < 0.12
 
-      update_led_(peak_prob_, tier);
+      // Long silence forfeits the streak bonus (15 s).
+      if (tier == 0) {
+        if (++idle_ticks_ >= 150 && bonus_ != 0.0f) bonus_ = 0.0f;
+      } else {
+        idle_ticks_ = 0;
+      }
 
-      if (tier > last_tier_) { play_tone_(tier); last_tier_ = tier; }
+      update_led_(score, tier);
+
+      // Post-win cooldown FIRST: ignore detections (fanfare echo can re-trigger),
+      // and gate the tone player too — it used to run before this check, so a
+      // residual tier-4 during cooldown played the WIN fanfare without on_win_()
+      // ever running ("win sound but no state switch").
+      if (cooldown_ > 0) {
+        cooldown_--;
+        last_tier_ = 4;   // no tones until the bar returns to idle after cooldown
+        was_win_ = true;  // no re-win until prob drops below WIN and comes back
+        peak_prob_ = 0.0f;
+        peak_hold_ = 0;
+        bonus_ = 0.0f;   // win consumes the streak — next word starts from scratch
+        id(game_prob) = 0.0f;
+        push_thermo_(0.0f, 0);
+        push_mic_thermo_(id(fda).get_mic_level());
+        continue;
+      }
+
+      if (tier > last_tier_) {
+        play_tone_(tier);
+        last_tier_ = tier;
+        // Reaching caliente banks a bonus for the NEXT attempts (once per attempt:
+        // last_tier_ only re-arms after the bar returns to idle).
+        if (tier == 3) {
+          bonus_ += 0.04f;
+          if (bonus_ > 0.12f) bonus_ = 0.12f;
+        }
+      }
       if (tier == 0) last_tier_ = 0;
 
       bool is_win = (tier == 4);
-      if (is_win && !was_win_) on_win_();
+      if (is_win && !was_win_) { on_win_(); cooldown_ = 20; }  // 20 × 100ms = 2s cooldown
       was_win_ = is_win;
 
       // Every 5s diagnostic (always, so we know the loop is alive even when silent).
       if (++diag_ticks >= 50) {
-        ESP_LOGD(GAME_TAG, "prob=%.3f peak=%.3f tier=%d mww=%d",
-                 prob, peak_prob_, tier, id(mww).is_running() ? 1 : 0);
+        ESP_LOGD(GAME_TAG, "prob=%.3f peak=%.3f bonus=%.2f tier=%d mww=%d",
+                 prob, peak_prob_, bonus_, tier, id(mww).is_running() ? 1 : 0);
         diag_ticks = 0;
       }
       // Immediate log for any non-zero probability (catches brief 100ms spikes).
       if (prob > 0.01f) {
-        ESP_LOGI(GAME_TAG, "ACTIVE prob=%.3f peak=%.3f tier=%d", prob, peak_prob_, tier);
+        ESP_LOGI(GAME_TAG, "ACTIVE prob=%.3f peak=%.3f bonus=%.2f tier=%d", prob, peak_prob_, bonus_, tier);
       }
 
       // Full background only on scene change — avoids overwriting the thermometer strip,
@@ -301,7 +354,7 @@ class GameDisplay : public esphome::Component {
         last_scene_ = cur;
       }
 
-      push_thermo_(peak_prob_, tier);
+      push_thermo_(score, tier);
       push_mic_thermo_(id(fda).get_mic_level());
     }
   }

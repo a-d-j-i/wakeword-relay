@@ -117,13 +117,13 @@ micro_wake_word:
   models:
     # ON = okay_nabu: built-in, trained on a huge dataset -> very robust. Used as the
     # reference to compare against our home-trained Spanish model (buenas noches = OFF).
-    - model: alexa #../models/turn_on.json
+    - model: ../models/turn_on.json
       id: turn_on_model
       probability_cutoff: 0.4         # baked-in default is 0.97; lowered hard for sensitivity
       internal: true                  # don't persist enabled flag to NVS -> RAM-only (gates pref_.save in streaming_model.cpp)
     # OFF = buenas noches (our Spanish model). Kept small so it coexists with okay_nabu —
     # two full built-ins (okay_nabu + hey_jarvis) overran the inference task and broke ON.
-    - model: okay_nabu # ../models/turn_off.json   # buenas noches
+    - model: ../models/turn_off.json   # buenas noches
       id: turn_off_model
       probability_cutoff: 0.2          # weaker model -> low cutoff. Two-word design makes this safe.
       internal: true                   # don't persist enabled flag to NVS -> RAM-only

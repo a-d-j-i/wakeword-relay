@@ -1,17 +1,16 @@
 # =============================================================================
-# AI-VOX3 "frío / tibio / caliente" GAME (no-audio version).
-# Say the active wake word; the DETECTION PROBABILITY decides how "hot" you got:
-#   prob < 0.50         -> frío     (LED blue)        no toggle
-#   0.50 .. 0.65        -> tibio    (LED amber)       no toggle
-#   0.65 .. 0.80        -> caliente (LED red)         no toggle
-#   >= 0.80             -> WIN      (LED green) -> TOGGLE the relay + switch word
-# The LCD shows a thermometer (fill = probability, colour = tier) + a sun/moon for relay state.
+# AI-VOX3 "frío / tibio / caliente" GAME.
+# Say the active wake word; the DETECTION PROBABILITY decides how "hot" you got.
+# Tier bands + WIN_THRESH live in components/game_display/game_display.h (currently
+# frío 0.12 / tibio 0.22 / caliente 0.35 / WIN 0.45), plus a "getting warmer" streak:
+# each caliente attempt banks +0.04 (cap 0.12) onto the score, so insisting on the
+# same word gets easier. WIN toggles the relay and switches to the other word.
+# The LCD shows a thermometer (fill = score, colour = tier) + a sun/moon for relay state.
 #
-# Uses patched micro_wake_word (trigger passes `probability`) via external_components:
-#   components/micro_wake_word/ — Trigger<std::string,float>, average_probability/255, float param in __init__.
-# Cutoff is LOW (0.3) so weak attempts still fire and read "frío". TUNE the tier
-# thresholds below to the `prob=` values you see logged (sliding-AVERAGE prob runs lower
-# than max — if WIN never triggers, lower 0.80).
+# Uses patched micro_wake_word (probability getters) via external_components:
+#   components/micro_wake_word/ — get_max_probability() / get_peak_and_reset() per model.
+# The models' probability_cutoff is 0.99 on purpose — see the comment at the models
+# block; lowering it makes the game go deaf for ~1s after every warm attempt.
 #
 # Audio feedback (speaking frío/tibio/caliente) is deferred: the mic<->speaker switch with
 # micro_wake_word in the loop is unreliable in ESPHome (see aivox3-audiotest.yaml). Revisit
@@ -33,9 +32,13 @@ esphome:
     - priority: -100
       then:
         - light.turn_on: { id: onboard_led, red: 15%, green: 8%, blue: 0%, brightness: 30%, transition_length: 0s }
-        - lambda: |-
-            id(es8311_codec).set_mute_off();
-            id(es8311_codec).set_volume(0.85f);
+        # No explicit unmute needed: the ES8311 comes up unmuted at a usable
+        # volume, so game tones work without this. Restore set_volume if tones
+        # are too quiet. (2026-07-11: the "silent wake word" bug was NOT the DAC;
+        # it was the RX slot_mask quirk fixed in full_duplex_audio.cpp.)
+        # - lambda: |-
+        #     id(es8311_codec).set_mute_off();
+        #     id(es8311_codec).set_volume(0.85f);
         - micro_wake_word.start:
         - micro_wake_word.enable_model: turn_on_model      # deterministic boot: OFF, listen for "turn on"
         - micro_wake_word.disable_model: turn_off_model
@@ -83,7 +86,7 @@ audio_dac:
     bits_per_sample: 16bit
     use_mclk: true
     use_microphone: false          # analog mic via fda/I2S; true changes ADC I2S format, breaks fda
-    mic_gain: 30DB
+    mic_gain: 30DB                 # aivox3.yaml uses 42DB; 30 avoids close-range clipping, PCAN normalizes
 
 # wifi disabled for testing — re-enable when needed
 # wifi:
@@ -105,14 +108,18 @@ micro_wake_word:
   microphone: fda
   stop_after_detection: false
   models:
+    # probability_cutoff 0.99 ON PURPOSE: the game polls raw probabilities and owns
+    # all win logic, so the engine's own detection must NEVER fire — when it does,
+    # it calls reset_probabilities() (ignore_windows_ = -100 ≈ 1s+ deaf), which made
+    # the game unresponsive right after every warm attempt (avg ≥ old 0.30 cutoff).
     - model: ../models/turn_on.json    # chispa mágica
       id: turn_on_model
-      probability_cutoff: 0.30
+      probability_cutoff: 0.99
       sliding_window_size: 2
       internal: true
     - model: ../models/turn_off.json   # buenas noches
       id: turn_off_model
-      probability_cutoff: 0.30
+      probability_cutoff: 0.99
       sliding_window_size: 2
       internal: true
   # No on_wake_word_detected — GameDisplay polls get_max_probability() every 100 ms

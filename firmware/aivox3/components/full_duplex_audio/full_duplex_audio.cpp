@@ -1,5 +1,7 @@
 #include "full_duplex_audio.h"
 
+#include "esphome/core/hal.h"
+
 #include <esp_http_client.h>
 #include <cmath>
 #include <cstdio>
@@ -42,6 +44,14 @@ void FullDuplexAudio::setup() {
                    .din = din_pin_,
                    .invert_flags = {.mclk_inv = false, .bclk_inv = false, .ws_inv = false}},
   };
+
+  // ESP32-S3 quirk: I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG leaves slot_mask at
+  // I2S_STD_SLOT_BOTH even in MONO mode (the classic-ESP32 variant of the macro
+  // selects LEFT). With BOTH, RX captures both stereo slots and the ES8311
+  // mirrors its mono ADC onto both -> every sample arrives twice -> audio is
+  // stretched 2x and wake word detection sees half-speed speech. Force LEFT,
+  // exactly like the stock i2s_audio microphone does for channel: left.
+  std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
 
   if ((err = i2s_channel_init_std_mode(tx_handle_, &std_cfg)) != ESP_OK) {
     ESP_LOGE(TAG, "TX init: %s", esp_err_to_name(err));
@@ -124,6 +134,62 @@ void FullDuplexAudio::save_clip(const std::string &wake_word, float probability,
   } else {
     ESP_LOGD(TAG, "Clip queued: %s p=%.2f tier=%d", wake_word.c_str(), probability, tier);
   }
+}
+
+void FullDuplexAudio::dump_pcm_b64(uint32_t ms) {
+  if (!ring_buf_) {
+    ESP_LOGW(TAG, "PCMDUMP: no ring buffer");
+    return;
+  }
+  static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  static uint32_t dump_id = 0;
+
+  size_t rb = ring_buf_bytes_();
+  size_t want = (size_t) sample_rate_ * 2 * ms / 1000;
+  if (want > rb) want = rb;
+  want -= want % 6;  // multiple of 3 keeps each b64 line unpadded; of 2 keeps int16 samples whole
+
+  // Copy the window out first: encoding + logging takes ~0.5 s and rx_task keeps
+  // writing into the ring, so encoding in place would race with the writer.
+  auto *snap = static_cast<uint8_t *>(heap_caps_malloc(want, MALLOC_CAP_SPIRAM));
+  if (!snap) {
+    ESP_LOGW(TAG, "PCMDUMP: snapshot alloc failed");
+    return;
+  }
+  uint32_t head = ring_head_;  // oldest byte of our window:
+  size_t start = (head + rb - want) % rb;
+  size_t first = rb - start < want ? rb - start : want;
+  memcpy(snap, ring_buf_ + start, first);
+  memcpy(snap + first, ring_buf_, want - first);
+
+  dump_id++;
+  constexpr size_t BYTES_PER_LINE = 72;  // -> 96 b64 chars
+  size_t total_lines = (want + BYTES_PER_LINE - 1) / BYTES_PER_LINE;
+  ESP_LOGI(TAG, "PCMDUMP %u BEGIN rate=%u bytes=%u lines=%u", (unsigned) dump_id, (unsigned) sample_rate_,
+           (unsigned) want, (unsigned) total_lines);
+
+  char line[BYTES_PER_LINE / 3 * 4 + 1];
+  for (size_t ln = 0; ln < total_lines; ln++) {
+    size_t off = ln * BYTES_PER_LINE;
+    size_t n = want - off < BYTES_PER_LINE ? want - off : BYTES_PER_LINE;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 3) {
+      uint8_t b0 = snap[off + i];
+      uint8_t b1 = i + 1 < n ? snap[off + i + 1] : 0;
+      uint8_t b2 = i + 2 < n ? snap[off + i + 2] : 0;
+      uint32_t v = ((uint32_t) b0 << 16) | ((uint32_t) b1 << 8) | b2;
+      line[o++] = B64[(v >> 18) & 63];
+      line[o++] = B64[(v >> 12) & 63];
+      line[o++] = i + 1 < n ? B64[(v >> 6) & 63] : '=';
+      line[o++] = i + 2 < n ? B64[v & 63] : '=';
+    }
+    line[o] = '\0';
+    ESP_LOGI(TAG, "PCMDUMP %u %u %s", (unsigned) dump_id, (unsigned) ln, line);
+    if ((ln & 31) == 31)
+      delay(2);  // let the USB-JTAG buffer drain so lines aren't dropped
+  }
+  ESP_LOGI(TAG, "PCMDUMP %u END", (unsigned) dump_id);
+  heap_caps_free(snap);
 }
 
 // --- static helpers ---

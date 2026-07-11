@@ -49,6 +49,12 @@ class FullDuplexAudio : public Component, public microphone::Microphone {
   // Snapshot the last 3 s from the PSRAM ring buffer and queue it for upload.
   void save_clip(const std::string &wake_word, float probability, int tier);
 
+  // DIAGNOSTIC: dump the last `ms` of the PSRAM ring buffer to the log as base64
+  // lines ("PCMDUMP <id> <seq> <b64>"). Decode with tools/decode_pcm_log.py.
+  // Call from the main loop (e.g. an interval: lambda) so log lines aren't dropped
+  // by the task log buffer.
+  void dump_pcm_b64(uint32_t ms);
+
   // Config setters (called by generated code)
   void set_mclk_pin(int pin) { mclk_pin_ = static_cast<gpio_num_t>(pin); }
   void set_bclk_pin(int pin) { bclk_pin_ = static_cast<gpio_num_t>(pin); }
