@@ -18,15 +18,16 @@ WORKDIR="${WORKDIR:-data}"        # one working dir; defaults under train/data/
 DL="$WORKDIR/download"            # shared dataset cache
 VOICES=(
   es_AR-daniela-high     # AR female, high
-#  es_MX-ald-medium       # MX male, medium
-#  es_MX-ald-x_low        # MX male, x_low
-#  es_MX-claude-high      # MX female, high
-#  es_ES-carlfm-x_low     # ES male, x_low
+  es_ES-carlfm-x_low     # ES male, x_low
   es_ES-davefx-medium    # ES male, medium
-#  es_ES-sharvard-medium  # ES male, medium
-#  es_ES-mls_10246-low    # ES female, low
-#  es_ES-mls_9972-low     # ES male, low
+  es_ES-sharvard-medium  # ES male, medium
+  es_MX-ald-x_low        # MX male, x_low
+  es_MX-claude-high      # MX female, high
 )
+# BROKEN or STRANGE
+#  es_ES-mls_9972-low     # ES male, low
+#  es_ES-mls_10246-low    # ES female, low
+#  es_MX-ald-medium       # MX male, medium
 
 python train.py --phrase "chispa magica" --phonetic "chispa mágica" \
   --piper_model "${VOICES[@]}" --samples 5000 --steps 45000 --neg_class_weight 22 \
