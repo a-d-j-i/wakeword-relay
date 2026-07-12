@@ -19,7 +19,7 @@ function buildMockBundle({ numClips = 3, clipSamples = 64, sampleRate = 16000, f
 }
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/trainer/');
     await page.waitForFunction(() => typeof noiseParseBundle === 'function');
     // Clear any OPFS state left by previous tests.
     await page.evaluate(() => noiseClearOPFS());

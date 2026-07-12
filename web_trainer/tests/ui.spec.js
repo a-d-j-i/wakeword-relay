@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 // Tab UI structural tests — do not require WASM to be fully initialised.
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/trainer/');
     await page.waitForLoadState('domcontentloaded');
 });
 

@@ -13,7 +13,7 @@
 //   { type:'tflite', bytes:Uint8Array }                   — bytes transferred
 //   { type:'tflite_error', message:string }
 
-importScripts('../web_trainer.js', 'augment.js');
+importScripts('../../common/web_trainer.js', 'augment.js');
 
 const _NEG_SCALE         = 0.0390625;
 const _NOISE_INT16_SCALE = 1.0 / 32768.0;
@@ -115,7 +115,11 @@ self.onmessage = async (e) => {
         if (_adam) { _M.ccall('adam_destroy',     null, ['number'], [_adam]); _adam = null; }
         if (_net)  { _M.ccall('mixednet_destroy', null, ['number'], [_net]);  _net  = null; }
 
-        if (!_M) _M = await createWebTrainer();
+        // In a worker, Emscripten resolves the .wasm relative to the WORKER's URL
+        // (js/), not the imported script's — point it at ../../common/ explicitly.
+        if (!_M) _M = await createWebTrainer({
+            locateFile: (p) => new URL('../../common/' + p, self.location.href).href,
+        });
 
         _net  = _M.ccall('mixednet_create', 'number', ['number'], [pooled]);
         _adam = _M.ccall('adam_create',     'number', ['number', 'number'], [_net, lr]);

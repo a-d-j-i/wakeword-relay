@@ -1,0 +1,3 @@
+# Large data bundles are distributed separately (see web_trainer/tools/build_*_bundle.py)
+trainer/negatives.mwwn
+trainer/noise.mwwb

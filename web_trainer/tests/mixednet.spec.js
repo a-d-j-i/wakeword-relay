@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 // MixedNet forward pass, backprop, and Adam optimizer tests (milestones 2-3).
-// Requires www/web_trainer.js and www/web_trainer.wasm.
+// Requires docs/common/web_trainer.js and docs/common/web_trainer.wasm.
 //
 // Spectrogram inputs are passed via ccall 'array' type (WASM stack) rather
 // than via Module.HEAPF32, which is closure-private in the modularized build.
@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.setTimeout(60_000);
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/test_wasm.html');
+    await page.goto('/trainer/test_wasm.html');
     await page.waitForFunction(() => window.webTrainerReady === true, { timeout: 20_000 });
 });
 

@@ -19,7 +19,7 @@ Usage:
     python3 web_trainer/tools/build_noise_bundle.py \\
         --input_dirs /vms2/work_tmp/download/audioset_16k \\
                      /vms2/work_tmp/download/fma_16k \\
-        --output web_trainer/www/noise.bin \\
+        --output docs/trainer/noise.bin \\
         --num_clips 500 \\
         --clip_seconds 4.0
 

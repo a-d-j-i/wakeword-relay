@@ -111,22 +111,26 @@ if(EMSCRIPTEN)
         "
     )
 
-    # Copy WASM outputs to www/ so the HTML page can reference them directly.
-    set(WWW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/www)
+    # Copy WASM outputs into the GitHub-Pages tree (main branch, /docs folder) —
+    # commit the generated files after building. Layout:
+    #   docs/trainer/  the trainer app (piper_phonemize outputs live here)
+    #   docs/common/   web_trainer.js/.wasm, shared by trainer AND emulator pages
+    set(WWW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../docs/trainer)
+    set(COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../docs/common)
     add_custom_command(TARGET piper_phonemize POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
             ${CMAKE_CURRENT_BINARY_DIR}/piper_phonemize.js
             ${CMAKE_CURRENT_BINARY_DIR}/piper_phonemize.wasm
             ${CMAKE_CURRENT_BINARY_DIR}/piper_phonemize.data
             ${WWW_DIR}/
-        COMMENT "Copying piper_phonemize outputs to www/"
+        COMMENT "Copying piper_phonemize outputs to docs/trainer/"
     )
 
     add_custom_command(TARGET web_trainer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
             ${CMAKE_CURRENT_BINARY_DIR}/web_trainer.js
             ${CMAKE_CURRENT_BINARY_DIR}/web_trainer.wasm
-            ${WWW_DIR}/
-        COMMENT "Copying web_trainer outputs to www/"
+            ${COMMON_DIR}/
+        COMMENT "Copying web_trainer outputs to docs/common/"
     )
 endif()

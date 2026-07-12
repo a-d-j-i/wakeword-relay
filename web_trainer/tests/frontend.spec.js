@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 // MicroFrontend WASM tests (milestone 1).
-// Requires www/web_trainer.js and www/web_trainer.wasm.
+// Requires docs/common/web_trainer.js and docs/common/web_trainer.wasm.
 //
 // Input buffers are passed via ccall 'array' type (placed on WASM stack)
 // rather than via Module.HEAP16 etc., which are closure-private in the
@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test';
 test.setTimeout(30_000);
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/test_wasm.html');
+    await page.goto('/trainer/test_wasm.html');
     await page.waitForFunction(() => window.webTrainerReady === true, { timeout: 20_000 });
 });
 

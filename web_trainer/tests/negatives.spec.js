@@ -33,7 +33,7 @@ function buildMockBundle(categories, numFrames = 10, numFeatures = 5) {
 }
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/trainer/');
     await page.waitForFunction(() => typeof negParseBundle === 'function');
 });
 

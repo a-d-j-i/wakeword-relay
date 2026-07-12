@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 test.setTimeout(60_000);
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/test_wasm.html');
+    await page.goto('/trainer/test_wasm.html');
     await page.waitForFunction(() => window.webTrainerReady === true &&
         typeof audioToFloat32Spec === 'function', { timeout: 20_000 });
 });
@@ -180,7 +180,7 @@ test('trainExportTFLite returns a valid TFLite buffer with TFL3 magic', async ({
     test.setTimeout(120_000);
 
     const result = await page.evaluate(async () => {
-        const resp = await fetch('/tflite_template.bin');
+        const resp = await fetch('/trainer/tflite_template.bin');
         if (!resp.ok) return { error: 'template fetch failed: ' + resp.status };
         const tmplBytes = new Uint8Array(await resp.arrayBuffer());
 

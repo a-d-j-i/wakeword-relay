@@ -5,8 +5,10 @@ Assistant, no cloud at runtime.
 
 - **`train/`** — CLI pipeline to train a custom INT8 TFLite wake word model
 - **`firmware/`** — ESPHome YAML + model manifest for ESP32-S3 deployment
-- **[Browser tester](https://a-d-j-i.github.io/wakeword-relay/)** — load a `.tflite` and test against WAV files or your
+- **[Browser tester](https://a-d-j-i.github.io/wakeword-relay/emulator/)** — load a `.tflite` and test against WAV files or your
   live mic
+- **[Browser trainer](https://a-d-j-i.github.io/wakeword-relay/trainer/)** — train a wake word model entirely in the
+  browser (source in `web_trainer/`, deployed from `docs/trainer/`)
 
 ## Hardware
 
@@ -95,10 +97,10 @@ Serve locally (required — WASM won't load from `file://`):
 
 ```bash
 cd docs && python3 -m http.server 8080
-# Open http://localhost:8080
+# Open http://localhost:8080/emulator/ (tester) or /trainer/
 ```
 
-Or visit **https://a-d-j-i.github.io/wakeword-relay/**
+Or visit **https://a-d-j-i.github.io/wakeword-relay/emulator/**
 
 Load a `.tflite`, then:
 

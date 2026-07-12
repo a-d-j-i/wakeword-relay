@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 test.setTimeout(60_000);
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/trainer/');
 
     // Wait until espeak-ng WASM + data are fully loaded and initialised.
     await expect(page.locator('#load-status'))

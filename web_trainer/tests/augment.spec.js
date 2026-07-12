@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 // Tests navigate to / (index.html) and call augment functions directly.
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/trainer/');
     // Wait until augment.js is loaded (augmentSample is defined).
     await page.waitForFunction(() => typeof augmentSample === 'function');
 });

@@ -24,11 +24,11 @@ Usage:
     pip install mmap-ninja          # if not already installed
     python3 web_trainer/tools/build_negatives_bundle.py \\
         --input_dir /vms2/work_tmp/download/negative_datasets \\
-        --output web_trainer/www/negatives.bin \\
+        --output docs/trainer/negatives.bin \\
         --samples_per_category 1000 \\
         --num_frames 160
 
-The output file is git-ignored (listed in .gitignore). Copy it to www/ so the
+The output file is git-ignored (listed in .gitignore). Copy it to docs/trainer/ so the
 local HTTP server can serve it at /negatives.bin, or host it remotely.
 """
 

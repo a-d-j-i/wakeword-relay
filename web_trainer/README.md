@@ -20,7 +20,7 @@ Replicates the `train/train.py` pipeline entirely in-browser:
 Requires [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) for the WASM target.
 
 ```bash
-# WASM build (outputs to www/)
+# WASM build (outputs to ../docs/trainer/ + ../docs/common/)
 source /home/work/emsdk/emsdk_env.sh
 emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
 cmake --build build-wasm --target web_trainer -j4
@@ -30,13 +30,13 @@ cmake -S . -B build-native -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-native --target web_trainer
 ```
 
-The WASM build copies `web_trainer.js` and `web_trainer.wasm` into `www/` automatically.
+The WASM build copies `web_trainer.js` and `web_trainer.wasm` into `../docs/trainer/` automatically.
 
 **Build directories** — all are generated outputs (git-ignored):
 
 | Directory | Purpose | Needed? |
 |-----------|---------|---------|
-| `build-wasm/` | Emscripten WASM build → `www/` | Yes — primary build |
+| `build-wasm/` | Emscripten WASM build → `../docs/trainer/` | Yes — primary build |
 | `build-native/` | Native x86 build → C++ unit tests | Yes, if running native tests |
 | `build/` | Stale WASM build (old directory name) | Delete — superseded by `build-wasm/` |
 | `build_native/` | Stale native build (old naming) | Delete — superseded by `build-native/` |
@@ -53,9 +53,9 @@ cmake --build build-wasm --target piper_phonemize
 Any static file server works:
 
 ```bash
-cd www
+cd ../docs
 python3 -m http.server 8080
-# open http://localhost:8080
+# open http://localhost:8080/trainer/
 ```
 
 ---
@@ -213,12 +213,12 @@ samples directly. Smaller and less diverse than the HuggingFace set, but enough 
 ### Language data
 
 The espeak-ng phonemizer supports 100+ languages. English and Spanish are pre-bundled in `piper_phonemize.data`
-(always available, no network request). All other languages are lazy-loaded from `www/espeak-ng-data/` on first use:
+(always available, no network request). All other languages are lazy-loaded from `../docs/trainer/espeak-ng-data/` on first use:
 
-- `www/espeak-ng-data/<lang>_dict` — compiled pronunciation dictionary (~50–200 KB)
-- `www/espeak-ng-data/lang/<family>/<lang>` — language config (few KB)
+- `../docs/trainer/espeak-ng-data/<lang>_dict` — compiled pronunciation dictionary (~50–200 KB)
+- `../docs/trainer/espeak-ng-data/lang/<family>/<lang>` — language config (few KB)
 
-Once fetched, the browser HTTP cache keeps them across sessions. The language map is in `www/js/lang_loader.js`. The `www/espeak-ng-data/` files are committed to the repo (12 MB) so
+Once fetched, the browser HTTP cache keeps them across sessions. The language map is in `../docs/trainer/js/lang_loader.js`. The `../docs/trainer/espeak-ng-data/` files are committed to the repo (12 MB) so
 the app works on a fresh clone without any setup step.
 
 **Rebuilding language data** (after upgrading espeak-ng or adding a new language):
@@ -231,15 +231,15 @@ sudo apt install espeak-ng-data
 cp /usr/lib/x86_64-linux-gnu/espeak-ng-data/*_dict  vendor/espeak-ng/data/
 cp -r /usr/lib/x86_64-linux-gnu/espeak-ng-data/lang/. vendor/espeak-ng/data/lang/
 
-# 3. Copy to www/ (static files for lazy loading)
-cp /usr/lib/x86_64-linux-gnu/espeak-ng-data/*_dict  www/espeak-ng-data/
-cp -r /usr/lib/x86_64-linux-gnu/espeak-ng-data/lang/. www/espeak-ng-data/lang/
+# 3. Copy to ../docs/trainer/ (static files for lazy loading)
+cp /usr/lib/x86_64-linux-gnu/espeak-ng-data/*_dict  ../docs/trainer/espeak-ng-data/
+cp -r /usr/lib/x86_64-linux-gnu/espeak-ng-data/lang/. ../docs/trainer/espeak-ng-data/lang/
 
 # 4. Rebuild piper_phonemize only (fast — just relink, no C recompilation)
 source /home/work/emsdk/emsdk_env.sh
 cmake --build build-wasm --target piper_phonemize
 
-# 5. If new language codes appeared, add them to _LANG_PATHS in www/js/lang_loader.js
+# 5. If new language codes appeared, add them to _LANG_PATHS in ../docs/trainer/js/lang_loader.js
 #    (generate the mapping with:)
 find /usr/lib/x86_64-linux-gnu/espeak-ng-data/lang -type f | sort | while read f; do
     family=$(basename $(dirname $f)); code=$(basename $f)
@@ -257,7 +257,7 @@ Ambient audio clips (AudioSet + FMA music) in MWWB format.
 ```bash
 python3 tools/build_noise_bundle.py \
   --input_dirs /path/to/audioset_16k /path/to/fma_16k \
-  --output www/noise.mwwb
+  --output ../docs/trainer/noise.mwwb
 ```
 
 Cached in OPFS — survives reloads. Without it, training still works (just no noise augmentation).
@@ -276,7 +276,7 @@ Cached in OPFS — survives reloads. Without it, training still works (just no n
 | `tflite_export.cpp/.h` | Streaming INT8 TFLite export: calibration, BN folding, per-channel INT8 quant, FlatBuffer template patching |
 | `phonemize.cpp`        | Thin C wrapper around the espeak-ng WASM module                                                             |
 
-### JavaScript (`www/js/`)
+### JavaScript (`../docs/trainer/js/`)
 
 | File               | Purpose                                                                                                                    |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------|
@@ -324,7 +324,7 @@ Full window is the production default (matches `train.py` output).
 
 Uses a template-and-patch approach:
 
-- `www/tflite_template.bin` — a `train.py`-produced TFLite (buenas_noches, 62 KB) used as graph topology template
+- `../docs/trainer/tflite_template.bin` — a `train.py`-produced TFLite (buenas_noches, 62 KB) used as graph topology template
 - `src/tflite_export.cpp` runs 500 calibration passes, folds batchnorm into conv weights, quantizes weights to INT8
   per-channel and activations asymmetrically, then patches weight buffers + quant params into the FlatBuffer template
   via `UnPackModel()` → `Model::Pack()`

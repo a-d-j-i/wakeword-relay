@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 // audioToSpectrogram requires window.webTrainerReady + Module.HEAPU8 (rebuilt WASM).
 
 test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/trainer/');
     await page.waitForFunction(() => typeof drawSpectrogram === 'function');
 });
 
