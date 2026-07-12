@@ -151,3 +151,12 @@ Applied directly to the vendored source in `train/microwakeword/` to fix breakag
 | Progress         | No ETA                                              | Step-level ETA during training                                                |
 | Resumability     | Restarts from scratch on re-run                     | Each stage skips if output already exists                                     |
 | SpecAugment      | Disabled (`time/freq_mask = [0]`)                   | Enabled (`time_mask 5×2`, `freq_mask 5×2`) — masks spectrogram bands to regularize / generalize past the few TTS voices |
+## License
+
+Original code is [MIT](LICENSE.md). The repository also vendors third-party
+components under their own licenses — notably **GPL-3.0** for espeak-ng
+(sources + the voice data served by the browser trainer) and for the ESPHome
+C++ `micro_wake_word` component in the firmware. See
+[LICENSE.md](LICENSE.md) for the full inventory,
+your obligations when redistributing, and [`licenses/`](licenses/) for the
+license texts.

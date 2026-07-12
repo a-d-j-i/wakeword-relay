@@ -769,12 +769,18 @@
     <p id="neg-status" class="status">Checking IndexedDB cache…</p>
 
     <details style="margin-top:0.6rem">
-      <summary>How to build the bundle</summary>
-      <p>Run once from the repo root:<br>
+      <summary>How to obtain the bundle</summary>
+      <p>The bundle is built from the pre-computed negative spectrogram datasets
+        published at
+        <a href="https://huggingface.co/datasets/kahrendt/microwakeword" target="_blank" rel="noopener">huggingface.co/datasets/kahrendt/microwakeword</a>
+        (speech, dinner_party, no_speech). <code>train/train.py</code> downloads them
+        automatically on its first run into <code>&lt;downloads_dir&gt;/negative_datasets/</code>.
+        Then run once from the repo root:<br>
         <code>python3 web_trainer/tools/build_negatives_bundle.py \
           --input_dir /path/to/negative_datasets \
           --output negatives.mwwn</code><br>
-        Then load the file below or host it and paste the URL.
+        (~38&nbsp;MB). Load the file below, or host it (e.g. a GitHub Release via the
+        script's <code>--upload</code> flag) and paste the URL.
       </p>
     </details>
 
