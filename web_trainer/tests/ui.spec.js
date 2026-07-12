@@ -81,7 +81,7 @@ test('Frontend tab contains a file input and status element', async ({ page }) =
 
 test('TTS tab contains model load controls and generate button', async ({ page }) => {
     await page.click('.tab-btn[data-tab="tts"]');
-    await expect(page.locator('#btn-load')).toBeDisabled();
+    await expect(page.locator('#file-voice')).toBeVisible();
     await expect(page.locator('#btn-generate')).toBeDisabled();
     await expect(page.locator('#phrase')).toHaveValue('hey lumus');
     await expect(page.locator('#lang')).toBeVisible();

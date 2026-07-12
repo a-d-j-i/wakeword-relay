@@ -108,11 +108,14 @@ function audioToSpectrogram(samples, sampleRate) {
     const fe       = Module.ccall('frontend_create', 'number', [], []);
     const maxFrames = Math.ceil(int16.length / 160) + 10;
     const featPtr  = Module._malloc(maxFrames * 40 * 2);  // uint16: 2 bytes per feature
-    const pcmBytes = new Uint8Array(int16.buffer);
 
+    // Heap-allocate PCM — ccall 'array' type uses stackAlloc, which overflows for large audio.
+    const pcmPtr = Module._malloc(int16.byteLength);
+    Module.HEAPU8.set(new Uint8Array(int16.buffer), pcmPtr);
     const T = Module.ccall('frontend_process', 'number',
-        ['number', 'array', 'number', 'number'],
-        [fe, pcmBytes, int16.length, featPtr]);
+        ['number', 'number', 'number', 'number'],
+        [fe, pcmPtr, int16.length, featPtr]);
+    Module._free(pcmPtr);
 
     Module.ccall('frontend_destroy', null, ['number'], [fe]);
 

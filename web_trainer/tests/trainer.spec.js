@@ -74,7 +74,7 @@ test('audioToFloat32Spec resamples non-16k input', async ({ page }) => {
     expect(result.spectrogram.length).toBe(result.T * 40);
 });
 
-test('audioToFloat32Spec values are in expected float range [0, ~10]', async ({ page }) => {
+test('audioToFloat32Spec values are in expected float range [0, ~26]', async ({ page }) => {
     const stats = await page.evaluate(() => {
         const samples = new Float32Array(32000);
         for (let i = 0; i < samples.length; i++)
@@ -85,7 +85,7 @@ test('audioToFloat32Spec values are in expected float range [0, ~10]', async ({ 
         return { lo, hi };
     });
     expect(stats.lo).toBeGreaterThanOrEqual(0);
-    expect(stats.hi).toBeLessThanOrEqual(12);   // uint8 max (255) × 1/25.6 ≈ 9.96
+    expect(stats.hi).toBeLessThanOrEqual(27);   // uint16 frontend max (~666) × 0.0390625 ≈ 26
 });
 
 // ── trainCreate / trainDestroy ────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 'use strict';
 
-// Lazy-loads espeak-ng language data files into the WASM virtual filesystem.
-// English (en) and Spanish (es) are pre-packed in piper_phonemize.data;
-// all other languages are fetched on demand from /espeak-ng-data/ static assets.
+// Ensures espeak-ng language data files exist in the WASM virtual filesystem.
+// The piper_phonemize.data preload currently embeds ALL dicts and lang files,
+// so this normally finds everything already present; missing files are
+// fetched on demand from /espeak-ng-data/ static assets as a fallback.
 
 // Maps espeak language code → path under /espeak-ng-data/lang/
 // (codes with no subfamily sit directly in lang/)
@@ -140,11 +141,22 @@ const _LANG_PATHS = {
     "yue-Latn-jyutping":"sit/yue-Latn-jyutping",
 };
 
+// Codes whose espeak lang file overrides the dictionary name
+// (everything else uses the code's prefix before the first '-').
+const _DICT_OVERRIDES = {
+    "hyw": "hy",
+    "ltg": "lv",
+    "nb":  "no",
+};
+
 // Preloaded by piper_phonemize.data — skip fetching these.
 const _PRELOADED = new Set(['en', 'es']);
 
 // Tracks which languages have been loaded this session.
 const _loaded = new Set(['en', 'es']);
+
+// Tracks which dict files are in the WASM FS (en/es come from the .data preload).
+const _loadedDicts = new Set(['en', 'es']);
 
 // _phonemizeModule reference — set by initLangLoader() after WASM init.
 let _piperModule = null;
@@ -170,26 +182,38 @@ async function loadLanguage(lang) {
 
     const base = 'espeak-ng-data';
     const FS   = _piperModule.FS;
+    const inFS = p => { try { FS.stat(p); return true; } catch (e) { return false; } };
 
-    // Fetch and write the dict file
-    const dictResp = await fetch(`${base}/${code}_dict`);
-    if (!dictResp.ok) throw new Error(`Failed to fetch ${code}_dict: ${dictResp.status}`);
-    const dictData = new Uint8Array(await dictResp.arrayBuffer());
-    FS.writeFile(`/espeak-ng-data/${code}_dict`, dictData);
+    // The current piper_phonemize.data preload embeds every dict and lang
+    // file, so normally nothing needs fetching. The fetch path below is a
+    // fallback in case the preload is ever slimmed down.
+
+    // Variant voices (es-419, en-US, pt-BR, …) share the base language's
+    // dictionary — only base-name dict files exist in espeak-ng-data.
+    const dict = _DICT_OVERRIDES[code] || code.split('-')[0];
+    if (!_loadedDicts.has(dict) && !inFS(`/espeak-ng-data/${dict}_dict`)) {
+        const dictResp = await fetch(`${base}/${dict}_dict`);
+        if (!dictResp.ok) throw new Error(`Failed to fetch ${dict}_dict: ${dictResp.status}`);
+        const dictData = new Uint8Array(await dictResp.arrayBuffer());
+        FS.writeFile(`/espeak-ng-data/${dict}_dict`, dictData);
+    }
+    _loadedDicts.add(dict);
 
     // Fetch and write the lang config file (may be in a subfamily dir)
     const langPath = _LANG_PATHS[code];
-    const langResp = await fetch(`${base}/lang/${langPath}`);
-    if (!langResp.ok) throw new Error(`Failed to fetch lang/${langPath}: ${langResp.status}`);
-    const langText = await langResp.text();
+    if (!inFS(`/espeak-ng-data/lang/${langPath}`)) {
+        const langResp = await fetch(`${base}/lang/${langPath}`);
+        if (!langResp.ok) throw new Error(`Failed to fetch lang/${langPath}: ${langResp.status}`);
+        const langText = await langResp.text();
 
-    // Ensure the subfamily directory exists in WASM FS
-    const parts = langPath.split('/');
-    if (parts.length > 1) {
-        const dir = `/espeak-ng-data/lang/${parts[0]}`;
-        try { FS.mkdir(dir); } catch(e) { /* already exists */ }
+        // Ensure the subfamily directory exists in WASM FS
+        const parts = langPath.split('/');
+        if (parts.length > 1) {
+            const dir = `/espeak-ng-data/lang/${parts[0]}`;
+            try { FS.mkdir(dir); } catch(e) { /* already exists */ }
+        }
+        FS.writeFile(`/espeak-ng-data/lang/${langPath}`, langText);
     }
-    FS.writeFile(`/espeak-ng-data/lang/${langPath}`, langText);
 
     _loaded.add(code);
     console.log(`[lang_loader] loaded: ${code}`);

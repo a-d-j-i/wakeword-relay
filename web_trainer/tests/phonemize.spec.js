@@ -65,8 +65,9 @@ test('ipaToIds — maps known phonemes from a minimal phoneme_id_map', async ({ 
         const map = { '^': [1], '$': [2], 'h': [10], 'aɪ': [11] };
         return Array.from(ipaToIds('h aɪ', map));
     });
-    // Should be [1 (BOS), 10, 11, 2 (EOS)] — BigInt64Array serialises as BigInt
-    expect(ids).toEqual([1n, 10n, 11n, 2n]);
+    // BOS, PAD, then each phoneme followed by PAD, then EOS — matches Piper's
+    // interleaved-pad input format. PAD defaults to 0 when '_' is not mapped.
+    expect(ids).toEqual([1n, 0n, 10n, 0n, 11n, 0n, 2n]);
 });
 
 test('ipaToIds — skips unknown phonemes gracefully', async ({ page }) => {
@@ -74,6 +75,6 @@ test('ipaToIds — skips unknown phonemes gracefully', async ({ page }) => {
         const map = { '^': [1], '$': [2], 'a': [5] };
         return Array.from(ipaToIds('a ʌ b', map));  // 'ʌ' and 'b' are not in map
     });
-    // BOS + 'a' + EOS; 'ʌ' and 'b' silently dropped
-    expect(ids).toEqual([1n, 5n, 2n]);
+    // BOS, PAD, 'a', PAD, EOS; 'ʌ' and 'b' silently dropped
+    expect(ids).toEqual([1n, 0n, 5n, 0n, 2n]);
 });

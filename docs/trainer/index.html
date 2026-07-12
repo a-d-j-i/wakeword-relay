@@ -42,6 +42,7 @@
   .status { font-size: 0.82rem; color: #666; }
   .ok  { color: #16a34a; }
   .err { color: #dc2626; }
+  .warn { color: #d97706; font-weight: 600; }
 
   /* Layout helpers */
   .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
@@ -182,7 +183,10 @@
       <summary>Where to get voice models</summary>
       <p>Download an <code>.onnx</code> and its <code>.onnx.json</code> from
       <a href="https://huggingface.co/rhasspy/piper-voices" target="_blank">rhasspy/piper-voices</a>.
-      English: <code>en/en_US/amy/medium/</code> · Spanish: <code>es/es_AR/daniela/high/</code></p>
+      English: <code>en/en_US/amy/medium/</code> · Spanish: <code>es/es_AR/daniela/high/</code><br>
+      Preview how each voice sounds at
+      <a href="https://rhasspy.github.io/piper-samples/" target="_blank">piper-samples</a>.
+      Then select <em>both</em> files below in one go (Ctrl/Cmd-click).</p>
     </details>
     <div id="tts-cached-row" class="row" style="display:none;margin-bottom:0.6rem;align-items:center;gap:0.8rem">
       <span id="tts-cache-status" class="status ok"></span>
@@ -190,14 +194,9 @@
     </div>
     <div class="file-row" style="margin-top:0.5rem">
       <div>
-        <label>Model file (.onnx)</label>
-        <input type="file" id="file-model" accept=".onnx">
+        <label>Voice files (.onnx + .onnx.json — select both at once; loads automatically)</label>
+        <input type="file" id="file-voice" accept=".onnx,.json" multiple>
       </div>
-      <div>
-        <label>Config file (.onnx.json)</label>
-        <input type="file" id="file-config" accept=".json">
-      </div>
-      <button id="btn-load" disabled style="align-self:flex-end">Load</button>
     </div>
     <p id="load-status" class="status"><span id="load-spinner" class="spinner" style="display:none"></span><span id="load-status-text">Waiting for phonemizer…</span></p>
   </div>

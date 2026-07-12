@@ -18,7 +18,10 @@
 //   On any error:
 //   → POST   { type:'error',     id? (absent for init), message }
 
-importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js');
+// ort.webgpu.min.js bundles both the WebGPU and WASM backends (plain
+// ort.min.js is WASM-only, making the 'webgpu' EP request silently fall
+// back to CPU with a console warning).
+importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.webgpu.min.js');
 
 let _session     = null;
 let _sampleRate  = 22050;
@@ -58,8 +61,12 @@ self.addEventListener('message', async ({ data }) => {
             ort.env.wasm.numThreads = 1;   // one thread per worker; pool gives parallelism
             const resp = await fetch(data.modelUrl);
             if (!resp.ok) throw new Error('model fetch HTTP ' + resp.status);
+            // Only request webgpu when the browser actually exposes it —
+            // avoids the "backend not found" warning on non-WebGPU browsers.
+            const eps = self.navigator?.gpu ? ['webgpu', 'wasm'] : ['wasm'];
+            console.log('[piper_worker] execution providers:', eps.join(','));
             _session     = await ort.InferenceSession.create(
-                await resp.arrayBuffer(), { executionProviders: ['webgpu', 'wasm'] });
+                await resp.arrayBuffer(), { executionProviders: eps });
             _sampleRate  = data.sampleRate;
             _numSpeakers = data.numSpeakers;
             self.postMessage({ type: 'ready' });

@@ -108,9 +108,7 @@ feFileInput.addEventListener('change', async () => {
 let modelBlobUrl = null;   // Blob URL of the loaded .onnx; passed to synthesis workers
 let voiceConfig  = null;
 
-const fileModel   = document.getElementById('file-model');
-const fileConfig  = document.getElementById('file-config');
-const btnLoad      = document.getElementById('btn-load');
+const fileVoice   = document.getElementById('file-voice');
 const loadStatus   = document.getElementById('load-status');
 const loadSpinner  = document.getElementById('load-spinner');
 const loadStatusTx = document.getElementById('load-status-text');
@@ -136,21 +134,38 @@ function genSetStatus(text, cls) {
 function genSetWorking(on) { genSpinner.style.display = on ? '' : 'none'; }
 const audioList   = document.getElementById('audio-list');
 
-function checkFiles() {
-    btnLoad.disabled = !(fileModel.files.length && fileConfig.files.length);
-}
-fileModel.addEventListener('change', checkFiles);
-fileConfig.addEventListener('change', checkFiles);
+// The .onnx and .onnx.json can be picked together (multi-select) or one at a
+// time — each selection fills its slot and keeps whatever the other one holds.
+let pickedModel  = null;
+let pickedConfig = null;
 
-btnLoad.addEventListener('click', async () => {
-    btnLoad.disabled = true;
+fileVoice.addEventListener('change', () => {
+    for (const f of fileVoice.files) {
+        if (f.name.endsWith('.onnx'))      pickedModel  = f;
+        else if (f.name.endsWith('.json')) pickedConfig = f;
+    }
+    // Reset so re-selecting the same file always fires 'change' again.
+    fileVoice.value = '';
+    if (!pickedModel)
+        loadSetStatus('✓ ' + pickedConfig.name + ' — still missing the model: ' +
+            'click the picker again and select the .onnx file', 'warn');
+    else if (!pickedConfig)
+        loadSetStatus('✓ ' + pickedModel.name + ' — still missing the config: ' +
+            'click the picker again and select the .onnx.json file', 'warn');
+    else
+        // Defer past the change event so the file dialog can tear down
+        // before the (heavy) model read/caching starts.
+        setTimeout(loadVoiceModel, 0);
+});
+
+async function loadVoiceModel() {
     loadSetWorking(true);
     loadSetStatus('Loading…');
     await new Promise(r => requestAnimationFrame(r));
     try {
         const [modelBuf, configText] = await Promise.all([
-            fileModel.files[0].arrayBuffer(),
-            fileConfig.files[0].text(),
+            pickedModel.arrayBuffer(),
+            pickedConfig.text(),
         ]);
         voiceConfig = JSON.parse(configText);
         if (modelBlobUrl) URL.revokeObjectURL(modelBlobUrl);
@@ -164,11 +179,10 @@ btnLoad.addEventListener('click', async () => {
         piperCacheSave(modelBuf, configText).catch(e => console.warn('piper cache save:', e));
     } catch (e) {
         loadSetStatus('Error: ' + e.message, 'err');
-        btnLoad.disabled = false;
     } finally {
         loadSetWorking(false);
     }
-});
+}
 
 btnGenerate.addEventListener('click', async () => {
     if (!modelBlobUrl || !voiceConfig) return;
