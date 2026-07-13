@@ -53,16 +53,14 @@ function updatePrereqs() {
     trainPrepareBtn.disabled = !(hasTts && hasNeg);
 }
 
-// web_trainer WASM — used by Frontend and Augment tabs for spectrograms.
+// web_trainer WASM — used by the Augment tab and spectrogram widgets.
 createWebTrainer().then(m => {
     window.Module = m;
     window.webTrainerReady = true;
-    document.getElementById('frontend-status').textContent = 'Ready. Load a WAV file to see its spectrogram.';
-    document.getElementById('frontend-status').className = 'status ok';
     document.getElementById('augment-wasm-status').textContent = '';
 }).catch(e => {
-    document.getElementById('frontend-status').textContent = 'WASM init failed: ' + e.message;
-    document.getElementById('frontend-status').className = 'status err';
+    document.getElementById('augment-wasm-status').textContent = 'WASM init failed: ' + e.message;
+    document.getElementById('augment-wasm-status').className = 'status err';
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,34 +72,6 @@ function showSpectrogram(canvas, wrap, samples, sampleRate) {
     canvas.title = `${result.T} frames · ${(result.T * 10 / 1000).toFixed(2)} s · 40 features`;
     wrap.style.display = 'block';
 }
-
-// ── Frontend tab ──────────────────────────────────────────────────────────────
-
-const feFileInput   = document.getElementById('fe-file');
-const feCanvas      = document.getElementById('fe-canvas');
-const feCanvasWrap  = document.getElementById('fe-canvas-wrap');
-const feAudio       = document.getElementById('fe-audio');
-const feStats       = document.getElementById('fe-stats');
-
-feFileInput.addEventListener('change', async () => {
-    const file = feFileInput.files[0];
-    if (!file) return;
-    feStats.textContent = 'Processing…';
-    try {
-        const buf  = await file.arrayBuffer();
-        feAudio.src = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-        feAudio.style.display = '';
-        const wav  = loadWav(buf);
-        showSpectrogram(feCanvas, feCanvasWrap, wav.samples, wav.sampleRate);
-        const result = audioToSpectrogram(wav.samples, wav.sampleRate);
-        feStats.textContent = result
-            ? `${result.T} frames · ${(wav.samples.length / wav.sampleRate).toFixed(2)} s · ${wav.sampleRate} Hz source`
-            : 'WASM not ready — rebuild required for spectrogram';
-    } catch (e) {
-        feStats.textContent = 'Error: ' + e.message;
-        console.error(e);
-    }
-});
 
 // ── TTS tab ───────────────────────────────────────────────────────────────────
 
@@ -257,7 +227,6 @@ let augSourceSamples = null;
 let augSourceRate    = null;
 
 const augFileInput   = document.getElementById('aug-file');
-const augRunBtn      = document.getElementById('aug-run');
 const augStatus      = document.getElementById('aug-status');
 const augBeforeAudio = document.getElementById('aug-before-audio');
 const augAfterAudio  = document.getElementById('aug-after-audio');
@@ -295,10 +264,11 @@ augFileInput.addEventListener('change', async () => {
 
         const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
         augBeforeAudio.src = url;
+        augBeforeAudio.style.display = '';
         showSpectrogram(augBeforeCanvas, augBeforeWrap, wav.samples, wav.sampleRate);
-        augRunBtn.disabled = false;
         augStatus.textContent = `Loaded ${wav.samples.length} samples @ ${wav.sampleRate} Hz`;
         augStatus.className = 'status ok';
+        scheduleAugment(0);   // show the augmented result immediately
     } catch (e) {
         augStatus.textContent = 'Error: ' + e.message;
         augStatus.className = 'status err';
@@ -725,10 +695,24 @@ function _packSpecs(specs) {
 
 // ── Augment tab ───────────────────────────────────────────────────────────────
 
-augRunBtn.addEventListener('click', async () => {
+// Augmentation runs live: every control change re-runs it (debounced so a
+// slider drag doesn't queue dozens of runs; overlapping runs coalesce).
+let _augTimer   = null;
+let _augRunning = false;
+let _augQueued  = false;
+
+function scheduleAugment(delay = 120) {
     if (!augSourceSamples) return;
-    augRunBtn.disabled = true;
+    clearTimeout(_augTimer);
+    _augTimer = setTimeout(runAugment, delay);
+}
+
+async function runAugment() {
+    if (!augSourceSamples) return;
+    if (_augRunning) { _augQueued = true; return; }
+    _augRunning = true;
     augStatus.textContent = 'Augmenting…';
+    augStatus.className = 'status';
 
     try {
         const irs = reverbSelect.value !== 'none' ? await ensureIRs() : [];
@@ -786,9 +770,16 @@ augRunBtn.addEventListener('click', async () => {
         augStatus.className = 'status err';
         console.error(e);
     } finally {
-        augRunBtn.disabled = false;
+        _augRunning = false;
+        if (_augQueued) { _augQueued = false; runAugment(); }
     }
-});
+}
+
+pitchSlider.addEventListener('input',  () => scheduleAugment());
+noiseSlider.addEventListener('input',  () => scheduleAugment());
+eqCheck.addEventListener('change',     () => scheduleAugment(0));
+noiseCheck.addEventListener('change',  () => scheduleAugment(0));
+reverbSelect.addEventListener('change',() => scheduleAugment(0));
 
 // ── Train tab — training loop ─────────────────────────────────────────────────
 
@@ -1226,9 +1217,18 @@ const recSpecWrap   = document.getElementById('rec-spec-wrap');
 const recCanvas     = document.getElementById('rec-canvas');
 const recAddBtn     = document.getElementById('rec-add-btn');
 const recAddStatus  = document.getElementById('rec-add-status');
+const recStatus     = document.getElementById('rec-status');
 const recPoolBadge  = document.getElementById('rec-pool-badge');
 const recPoolStatus = document.getElementById('rec-pool-status');
 const recPoolList   = document.getElementById('rec-pool-list');
+
+// getUserMedia only exists in secure contexts (HTTPS or localhost) —
+// without it the Record button can never work, so say so up front.
+if (!navigator.mediaDevices?.getUserMedia) {
+    recStartBtn.disabled  = true;
+    recStatus.textContent = 'Microphone unavailable: not a secure context — open this page via HTTPS or as localhost.';
+    recStatus.className   = 'status err';
+}
 
 let _mediaRecorder  = null;
 let _recChunks      = [];
@@ -1254,6 +1254,8 @@ function _recUpdatePool() {
 recStartBtn.addEventListener('click', async () => {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recStatus.textContent = '';
+        recStatus.className   = 'status';
         _recChunks     = [];
         _mediaRecorder = new MediaRecorder(stream);
 
@@ -1318,8 +1320,10 @@ recStartBtn.addEventListener('click', async () => {
         recClearBtn.style.display = 'none';
         recPreview.style.display  = 'none';
     } catch (err) {
-        recAddStatus.textContent = 'Microphone error: ' + err.message;
-        recAddStatus.className   = 'status err';
+        // recStatus, not recAddStatus: the latter sits inside the preview div,
+        // which is hidden until a recording succeeds.
+        recStatus.textContent = 'Microphone error: ' + err.message;
+        recStatus.className   = 'status err';
     }
 });
 
