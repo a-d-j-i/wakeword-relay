@@ -131,23 +131,23 @@ class Clips:
                         ):
                             filtered_paths.append(audio_file)
 
-        # Load all clips eagerly with scipy to avoid TF/libsndfile memory allocator conflict.
-        # soundfile/libsndfile called after TF initialises its custom malloc hooks causes
-        # a segfault; scipy.io.wavfile is pure Python/numpy and has no such conflict.
-        import scipy.io.wavfile as _wf
-        import scipy.signal as _ss
+        # Decoration: delegate to our own shared loader at the train/ root
+        # (audio_io.load_wav_16k), so student and teacher never diverge on
+        # sample-rate handling / resampling. It uses scipy.io.wavfile rather
+        # than soundfile because libsndfile segfaults when called after TF
+        # installs its custom malloc hooks. The path insert makes the import
+        # work regardless of the cwd microwakeword is imported from.
+        import sys as _sys
+        from pathlib import Path as _Path
 
-        def _load_16k(path):
-            sr, data = _wf.read(str(path))
-            if data.dtype == np.int16:
-                data = data.astype(np.float32) / 32768.0
-            else:
-                data = data.astype(np.float32)
-            if sr != 16000:
-                data = _ss.resample(data, int(round(len(data) * 16000 / sr)))
-            return {"audio": {"array": data}}
+        _train_root = str(_Path(__file__).resolve().parents[2])
+        if _train_root not in _sys.path:
+            _sys.path.insert(0, _train_root)
+        from audio_io import load_wav_16k
 
-        all_entries = [_load_16k(p) for p in filtered_paths]
+        all_entries = [
+            {"audio": {"array": load_wav_16k(p)}} for p in filtered_paths
+        ]
 
         if random_split_seed is not None:
             rng = random.Random(random_split_seed)

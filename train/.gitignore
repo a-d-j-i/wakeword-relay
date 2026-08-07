@@ -12,3 +12,6 @@ __pycache__/
 
 # generated training config (written by train.py into data/, but just in case)
 training_parameters.yaml
+
+# distill.sh local config (machine paths)
+.env

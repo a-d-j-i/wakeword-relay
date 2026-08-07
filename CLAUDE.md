@@ -10,17 +10,27 @@ Two-folder project:
 
 ## Environment Setup
 
-### Project-wide (Formatting & ESPHome)
-```bash
-pip install -r requirements.txt
-```
+**Two separate venvs, one per subproject** — they must NOT be merged: ESPHome
+pins `click==8.3.3` while the training stack's `huggingface_hub` requires
+`click>=8.4.0`, so a single shared venv cannot satisfy both. Each subproject has
+its own `requirements.txt`; there is no root one.
 
-### Training Pipeline
+### Training / distillation (`train/requirements.txt`)
 ```bash
 cd train
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+```
+This venv also runs `web_trainer/tools/quantize_from_browser.py` (needs Keras +
+the vendored microwakeword). The web trainer's JS/WASM deps live in
+`web_trainer/package.json`, not here.
+
+### Firmware / tooling (`firmware/requirements.txt`) — ESPHome + Ruff
+```bash
+python3 -m venv firmware/venv
+source firmware/venv/bin/activate
+pip install -r firmware/requirements.txt
 ```
 
 Python 3.11 tested; 3.10–3.11 should work.
@@ -83,7 +93,7 @@ See the [ESPHome docs](https://esphome.io/components/micro_wake_word).
 ## Firmware (`firmware/`)
 
 ```bash
-pip install esphome
+source firmware/venv/bin/activate             # firmware venv (see Environment Setup)
 esphome run firmware/wakeword-relay.yaml      # compile + flash over USB
 esphome logs firmware/wakeword-relay.yaml     # watch detections
 ```
@@ -112,7 +122,7 @@ The old English `hey_lumus.*` and `lumus.*` models are kept in `firmware/models/
 ## Vendored packages in `train/`
 
 - **`microwakeword/`** — microWakeWord training framework (patches below)
-- **`piper_sample_generator/`** — TTS sample generator (v3.2.0, from PyPI wheel); includes bundled impulse WAVs in `impulses/`
+- **`piper_sample_generator/`** — TTS sample generator (v3.2.0, from PyPI wheel); includes bundled impulse WAVs in `impulses/`. Patched to decorate: after each WAV write, `_ensure_16k()` normalizes to 16 kHz mono via `train/audio_io.load_wav_16k` (Piper voices synthesize at their native rate, e.g. 22050 Hz for `-medium`; no-op when already 16 kHz)
 - **`piper_train/vits/commons.py`** — VITS utilities required by `piper_sample_generator.__main__`; not distributed in the PyPI wheel, fetched from the git repo
 
 ## Patches in `train/microwakeword/`
@@ -125,10 +135,39 @@ The vendored source has these changes applied directly (no runtime patching):
 | `audio/augmentation.py` | Remove `AddColorNoise` | Dropped in audiomentations 0.36 |
 | `microwakeword/train.py`, `test.py` | `np.trapz` → `np.trapezoid` | Deprecated in NumPy 2.0 |
 | `microwakeword/train.py` | Remove `.numpy()` on `evaluate()` results | TF 2.16+ returns plain NumPy |
-| `audio/clips.py` | Load WAV with `scipy.io.wavfile` instead of soundfile | libsndfile segfaults after TF malloc hooks |
+| `audio/clips.py` | Decorate: delegate WAV loading to our own `train/audio_io.load_wav_16k` (mono, float32, resampled to 16 kHz) instead of soundfile | libsndfile segfaults after TF malloc hooks; single shared loader keeps student and teacher from diverging on sample-rate handling |
 | `audio/clips.py` | Replace `audio_metadata.load()` with `torchaudio.info()` for non-WAV duration | Removes `audio-metadata` dep (PyPI version hard-pins `attrs`, causing conflicts) |
 | `audio/clips.py` | Remove dead `import datasets` | Leftover from original HuggingFace audio loading path; no longer used after scipy patch |
 | `audio/__init__.py`, `layers/__init__.py` | Added (were missing) | Required for proper package import; wheel silently dropped these subdirs |
+| `audio/spectrograms.py` | Optional `clip_scorer` callback on `SpectrogramGeneration`; records one score per yielded spectrogram into `clip_scores` | Distillation B2 — score each augmented waveform with the teacher, aligned to sample order |
+| `microwakeword/data.py` | `get_data(..., return_soft=True)` and per-sample soft targets; loads `teacher_scores.npy` beside each mmap when present (falls back to hard label) | Distillation B3 — plumb teacher scores through the feature store; no-op without the file |
+| `microwakeword/train.py` | Blend `target = (1−λ)·hard + λ·soft` when `config["distill_weight"] > 0` (λ=0 is byte-identical to before) | Distillation B3 — soft-label loss; BCE is affine in its target so no custom loss needed |
+
+## Distillation (optional, off by default)
+
+`train.py --distill` trains the student against soft labels from an
+openWakeWord-style teacher; see [`DISTILLATION.md`](DISTILLATION.md). Without
+`--distill` the pipeline is unchanged. Everything runs in the **same
+`train/venv`** — the teacher only needs `onnx` + `onnxruntime` (added to
+`train/requirements.txt`; onnxruntime is required by `--distill` scoring
+regardless), and `torch` is already a training dep. New pieces:
+
+- **`train/train_teacher.py`** — trains the teacher head on Piper positives vs local negatives, exports 3 ONNX files (backbone auto-downloaded from openWakeWord's release).
+- **`train/teacher_infer.py`** — shared `Teacher` ONNX runtime (melspec → embedding → head), used by both the scorer and the browser emulator.
+- **`train.py` flags** `--distill --teacher_model <dir> --distill_weight λ` (default λ=0.5): scores augmented clips during `generate_augmented_features()` into `<split>/teacher_scores.npy`, and writes `distill_weight` into `training_parameters.yaml`. Export/quantization/manifest are unchanged.
+
+## Speech negatives (teacher + student)
+
+The stock HuggingFace negative **spectrograms** (`negative_datasets/{speech,dinner_party,no_speech}`) are all **English** speech (LibriSpeech/VOiCES/CHiME-6/DiPCo/FMA/FSD50K/WHAM). So a non-English model never learns to reject ordinary target-language speech and false-fires on it. Two tools generate real target-language speech negatives:
+
+- **`tools/gen_piper_negatives.py`** — synthesizes non-wake / confusable phrases (e.g. `"chispa"`, `"buenas"`, `"mi mamá me mima"`) with the **same** Piper voices as the positives → `$DL/piper_negatives_16k`. No download; hard phonetic negatives.
+- **`tools/fetch_speech.py`** — streams real speech to 16 kHz WAVs → `$DL/<lang>_speech_16k`. `--lang es` picks an ungated, parquet-native source set (FLEURS + VoxPopuli) from a built-in `LANG_SOURCES` registry (`es/en/fr/de/it/pt/pl/nl`); override with `--source dataset:config`. **Common Voice / MLS are unusable** — they ship `datasets`-loading scripts, which `datasets` 5.x dropped. Decodes raw bytes with `soundfile` to avoid `torchcodec` (not installed).
+
+These feed **two** consumers:
+- **Teacher** — `run.sh` passes the speech dirs to `train_teacher.py --negatives_dirs` (env `TEACHER_NEG_DIRS` to override). Fixes the "teacher fires on any speech" problem.
+- **Student** — **`train.py --student_neg_audio_dirs DIR... --student_neg_weight W`** (default 5.0): `generate_negative_features()` spectrogram-izes the raw WAVs (same augmenter as positives) into `generated_negative_features/{training,validation,testing}/negatives_mmap/`, appended to `training_parameters.yaml` as a `truth:False` source. `data.py` needs no change (it globs any `**/*_mmap/`). `run.sh` wires this via `STUDENT_NEG=1` (default) / `STUDENT_NEG_WEIGHT`.
+
+**Audio vs. spectrogram sources — the asymmetry:** a negative source can be raw **audio** (we derive spectrograms) or a **pre-computed spectrogram mmap**. They are interchangeable **only for the student**, whose input *is* the microfrontend spectrogram. The **teacher requires audio** — it runs its own mel front-end (32 mel bins → embedding → head) over the waveform and can neither consume the 40-channel microfrontend features nor the audio-less bundles. So **audio is a superset**: usable by teacher + student and teacher-scorable for soft labels; spectrogram-only sources are student-only, hard-label-only. (This is why the English mmap bundles stay hard negatives, and why the target-architecture keeps audio as the canonical input with `type:mmap` as an optional accelerator.)
 
 ## Key Hyperparameters to Tune
 

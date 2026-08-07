@@ -192,11 +192,33 @@ class MmapFeatureGenerator(object):
                 self.loaded_features.append(imported_features)
                 feature_index = len(self.loaded_features) - 1
 
+                # Optional distillation targets: a teacher_scores.npy sibling of
+                # the mmap directory holds one teacher score per spectrogram in
+                # the same order (written by train.py --distill).
+                teacher_scores = None
+                scores_path = os.path.join(
+                    os.path.dirname(mmap_path), "teacher_scores.npy"
+                )
+                if os.path.exists(scores_path):
+                    scores = np.load(scores_path)
+                    if len(scores) == len(imported_features):
+                        teacher_scores = scores
+                    else:
+                        logging.warning(
+                            "Ignoring %s: %d scores for %d spectrograms",
+                            scores_path,
+                            len(scores),
+                            len(imported_features),
+                        )
+
                 for i in range(0, len(imported_features)):
                     self.feature_sets[set_index].append(
                         {
                             "loaded_feature_index": feature_index,
                             "subindex": i,
+                            "soft": float(teacher_scores[i])
+                            if teacher_scores is not None
+                            else self.label,
                         }
                     )
 
@@ -243,7 +265,7 @@ class MmapFeatureGenerator(object):
             truncation_strategy (str): How to truncate if ``spectrogram`` is too long.
 
         Returns:
-            numpy.ndarray: A random spectrogram of specified length after truncation.
+            (numpy.ndarray, float): A random spectrogram of specified length after truncation and its soft (teacher) target — equal to the hard label when no teacher scores are present.
         """
         right_cutoff = 0
         if truncation_strategy == "default":
@@ -268,7 +290,7 @@ class MmapFeatureGenerator(object):
         if np.issubdtype(spectrogram.dtype, np.uint16):
             spectrogram = spectrogram.astype(np.float32) * 0.0390625
 
-        return spectrogram
+        return spectrogram, feature.get("soft", self.label)
 
     def get_feature_generator(
         self,
@@ -370,7 +392,7 @@ class ClipsHandlerWrapperGenerator(object):
             truncation_strategy (str): How to truncate if ``spectrogram`` is too long.
 
         Returns:
-            numpy.ndarray: A random spectrogram of specified length after truncation.
+            (numpy.ndarray, float): A random spectrogram of specified length after truncation and its soft target (always the hard label for this class).
         """
 
         if truncation_strategy == "default":
@@ -389,7 +411,7 @@ class ClipsHandlerWrapperGenerator(object):
         if np.issubdtype(spectrogram.dtype, np.uint16):
             spectrogram = spectrogram.astype(np.float32) * 0.0390625
 
-        return spectrogram
+        return spectrogram, float(self.label)
 
     def get_feature_generator(
         self,
@@ -507,6 +529,7 @@ class FeatureHandler(object):
             "freq_mask_max_size": 0,
             "freq_mask_count": 0,
         },
+        return_soft: bool = False,
     ):
         """Gets spectrograms from the appropriate mode. Ensures spectrograms are the approriate length and optionally applies augmentation.
 
@@ -521,10 +544,12 @@ class FeatureHandler(object):
                 time_mask_count: the total number of separate time masks applied for SpecAugment
                 freq_mask_max_size: maximum size of frequency feature masks for SpecAugment
                 freq_mask_count: the total number of separate feature masks applied for SpecAugment
+            return_soft (bool): if True, additionally return soft (teacher) targets between labels and weights — equal to the hard labels for sources without teacher scores
 
         Returns:
             data: spectrograms in a NumPy array (or as a list if in mode is `*_ambient`)
             labels: ground truth for the spectrograms; i.e., whether a positive sample or negative sample
+            soft: (only if ``return_soft``) soft targets in [0, 1] for distillation
             weights: penalizing weight for incorrect predictions for each spectrogram
         """
 
@@ -535,6 +560,7 @@ class FeatureHandler(object):
 
         data = []
         labels = []
+        soft_targets = []
         weights = []
 
         if mode == "training":
@@ -553,7 +579,7 @@ class FeatureHandler(object):
             )
 
             for provider in random_feature_providers:
-                spectrogram = provider.get_random_spectrogram(
+                spectrogram, soft = provider.get_random_spectrogram(
                     "training", features_length, truncation_strategy
                 )
                 spectrogram = spec_augment(
@@ -566,6 +592,7 @@ class FeatureHandler(object):
 
                 data.append(spectrogram)
                 labels.append(float(provider.label))
+                soft_targets.append(float(soft))
                 weights.append(float(provider.penalty_weight))
         else:
             for provider in self.feature_providers:
@@ -576,17 +603,21 @@ class FeatureHandler(object):
                 for spectrogram in generator:
                     data.append(spectrogram)
                     labels.append(provider.label)
+                    soft_targets.append(float(provider.label))
                     weights.append(provider.penalty_weight)
 
         if truncation_strategy != "none":
             # Spectrograms are all the same length, convert to numpy array
             data = np.array(data)
         labels = np.array(labels)
+        soft_targets = np.array(soft_targets)
         weights = np.array(weights)
 
         if truncation_strategy == "none":
             # Spectrograms may be of different length
-            return data, np.array(labels), np.array(weights)
+            if return_soft:
+                return data, labels, soft_targets, weights
+            return data, labels, weights
 
         indices = np.arange(labels.shape[0])
 
@@ -594,4 +625,6 @@ class FeatureHandler(object):
             # Randomize the order of the data, weights, and labels
             np.random.shuffle(indices)
 
+        if return_soft:
+            return data[indices], labels[indices], soft_targets[indices], weights[indices]
         return data[indices], labels[indices], weights[indices]

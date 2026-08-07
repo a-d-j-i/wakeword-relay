@@ -29,6 +29,7 @@ class SpectrogramGeneration:
         step_ms (int, optional): The window step size in ms for the spectrogram features. Defaults to 20.
         split_spectrogram_duration_s (float | None, optional): Splits generated spectrograms to yield nonoverlapping spectrograms with this duration. If None, the entire spectrogram is yielded. Defaults to None.
         slide_frames (int | None, optional): Strides the generated spectrograms to yield `slide_frames` overlapping spectrogram by removing features at the end of the spectrogram. If None, the entire spectrogram is yielded. Defaults to None.
+        clip_scorer (callable | None, optional): Called with each (augmented) waveform before its spectrogram is yielded from ``spectrogram_generator``; the returned float is appended to ``self.clip_scores`` once per yielded spectrogram, keeping score order aligned with the yielded sample order (e.g. a teacher model for distillation). Defaults to None.
     """
 
     def __init__(
@@ -38,6 +39,7 @@ class SpectrogramGeneration:
         step_ms: int = 20,
         split_spectrogram_duration_s: float | None = None,
         slide_frames: int | None = None,
+        clip_scorer=None,
     ):
 
         self.clips = clips
@@ -45,6 +47,8 @@ class SpectrogramGeneration:
         self.step_ms = step_ms
         self.split_spectrogram_duration_s = split_spectrogram_duration_s
         self.slide_frames = slide_frames
+        self.clip_scorer = clip_scorer
+        self.clip_scores: list[float] = []
 
     def get_random_spectrogram(self):
         """Retrieves a random audio clip's spectrogram that is optionally augmented.
@@ -84,6 +88,10 @@ class SpectrogramGeneration:
         for augmented_clip in augmented_generator:
             spectrogram = generate_features_for_clip(augmented_clip, self.step_ms)
 
+            clip_score = None
+            if self.clip_scorer is not None:
+                clip_score = float(self.clip_scorer(augmented_clip))
+
             if self.split_spectrogram_duration_s is not None:
                 # Splits the resulting spectrogram into non-overlapping spectrograms. The features from the first 20 feature windows are dropped.
                 desired_spectrogram_length = int(
@@ -97,8 +105,12 @@ class SpectrogramGeneration:
                     )[20::desired_spectrogram_length, ...]
 
                     for i in range(slided_spectrograms.shape[0]):
+                        if clip_score is not None:
+                            self.clip_scores.append(clip_score)
                         yield np.squeeze(slided_spectrograms[i])
                 else:
+                    if clip_score is not None:
+                        self.clip_scores.append(clip_score)
                     yield spectrogram
             elif self.slide_frames is not None:
                 # Generates self.slide_frames spectrograms by shifting over the already generated spectrogram
@@ -108,6 +120,10 @@ class SpectrogramGeneration:
                     spectrogram, window_shape=(spectrogram_length, spectrogram.shape[1])
                 )
                 for i in range(self.slide_frames):
+                    if clip_score is not None:
+                        self.clip_scores.append(clip_score)
                     yield np.squeeze(slided_spectrograms[i])
             else:
+                if clip_score is not None:
+                    self.clip_scores.append(clip_score)
                 yield spectrogram

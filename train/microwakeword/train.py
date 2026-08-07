@@ -187,6 +187,11 @@ def train(model, config, data_processor):
     if not (negative_class_weight_list := config.get("negative_class_weight")):
         negative_class_weight_list = [1.0]
 
+    # Distillation (see DISTILLATION.md §5 B3): lambda in [0, 1] blending hard
+    # labels with teacher scores. 0 disables distillation entirely (identical
+    # behavior to the original pipeline).
+    distill_weight = config.get("distill_weight", 0.0)
+
     # Ensure all training setting lists are as long as the training step iterations
     def pad_list_with_last_entry(list_to_pad, desired_length):
         while len(list_to_pad) < desired_length:
@@ -278,6 +283,7 @@ def train(model, config, data_processor):
         (
             train_fingerprints,
             train_ground_truth,
+            train_soft_targets,
             train_sample_weights,
         ) = data_processor.get_data(
             "training",
@@ -285,18 +291,33 @@ def train(model, config, data_processor):
             features_length=config["spectrogram_length"],
             truncation_strategy="default",
             augmentation_policy=augmentation_policy,
+            return_soft=True,
         )
 
         train_ground_truth = train_ground_truth.reshape(-1, 1)
+        train_soft_targets = train_soft_targets.reshape(-1, 1)
 
+        # Hard labels drive the class-weight lookup (dict indexed by {0, 1});
+        # the loss target is the blend. BCE is affine in its target, so one BCE
+        # against the blended target equals the weighted sum of the two BCEs.
+        # Note: with distill_weight > 0 the per-step accuracy/recall shown in
+        # the progress bar are computed against the blended target and become
+        # approximate; validation metrics always use hard labels.
         class_weights = {0: negative_class_weight, 1: positive_class_weight}
         combined_weights = train_sample_weights * np.vectorize(class_weights.get)(
             train_ground_truth
         )
 
+        if distill_weight > 0:
+            train_targets = (
+                1.0 - distill_weight
+            ) * train_ground_truth + distill_weight * train_soft_targets
+        else:
+            train_targets = train_ground_truth
+
         result = model.train_on_batch(
             train_fingerprints,
-            train_ground_truth,
+            train_targets,
             sample_weight=combined_weights,
         )
 

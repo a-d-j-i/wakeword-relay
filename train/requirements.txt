@@ -1,4 +1,7 @@
 tensorflow>=2.16
+# tf.summary.scalar in microwakeword/train.py needs tensorboard at runtime;
+# TF does not pull it in automatically.
+tensorboard
 ai-edge-litert
 webrtcvad-wheels
 
@@ -6,9 +9,17 @@ torch
 torchaudio
 datasets
 scipy
-audiomentations>=0.36.0
+# >=0.36 drops AddColorNoise (see vendored augmentation.py patch); <0.44 caps at
+# the version verified against the vendored Augmentation class (0.43.1).
+audiomentations>=0.36.0,<0.44
 mmap_ninja
 pyyaml
 numpy
 tqdm
 piper-tts>=1.4.2
+
+# Distillation (train_teacher.py + train.py --distill). onnxruntime runs the
+# teacher (melspec/embedding/head ONNX) for both head training and --distill
+# scoring; onnx is used only to export the trained head. See DISTILLATION.md.
+onnx
+onnxruntime

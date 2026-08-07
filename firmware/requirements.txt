@@ -1,0 +1,15 @@
+# Firmware & tooling venv — ESPHome (compile/flash/logs) + Ruff (formatting).
+#
+# Deliberately SEPARATE from ../train/requirements.txt: ESPHome pins click==8.3.3,
+# while the training stack's huggingface_hub requires click>=8.4.0 — the two
+# cannot share one venv. Keeping them apart is the fix for that conflict.
+#
+# Setup (from repo root):
+#   python3 -m venv firmware/venv
+#   firmware/venv/bin/pip install -r firmware/requirements.txt
+# Use it:
+#   source firmware/venv/bin/activate
+#   esphome run firmware/wakeword-relay.yaml
+
+esphome==2026.5.3   # tested version (manifest v2); bump deliberately
+ruff

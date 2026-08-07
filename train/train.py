@@ -73,6 +73,26 @@ def parse_args():
                         "for multiple voices — samples are split evenly across them. "
                         "If omitted, the default English model is used. "
                         "Voice names are downloaded automatically (e.g. es_AR-daniela-high).")
+    p.add_argument("--distill", action="store_true",
+                   help="Enable knowledge distillation: score every augmented clip with the "
+                        "teacher (see train_teacher.py) and train the student against "
+                        "blended soft labels. See DISTILLATION.md.")
+    p.add_argument("--teacher_model", default=None,
+                   help="Directory with the teacher's melspectrogram/embedding_model/head "
+                        ".onnx files (default: <data_dir>/teacher)")
+    p.add_argument("--distill_weight", type=float, default=0.5,
+                   help="Distillation blend λ in [0,1]: target = (1−λ)·hard + λ·teacher "
+                        "(default: 0.5; only used with --distill)")
+    p.add_argument("--student_neg_audio_dirs", nargs="+", default=None, metavar="DIR",
+                   help="Dirs of raw negative WAVs (e.g. Piper confusables, real "
+                        "target-language speech from tools/fetch_speech.py) to "
+                        "spectrogram-ize and add to the STUDENT's negatives. The stock "
+                        "HuggingFace negative spectrograms are all English speech, so "
+                        "this patches the language gap that makes non-English models "
+                        "false-fire on ordinary speech. Missing dirs are skipped.")
+    p.add_argument("--student_neg_weight", type=float, default=5.0,
+                   help="Sampling weight for the extra student negatives "
+                        "(default: 5.0; HF speech/dinner=10, no_speech=5 for reference)")
     p.add_argument("--regen_features", action="store_true",
                    help="Delete and regenerate augmented features even if they exist")
     p.add_argument("--regen_samples", action="store_true",
@@ -357,32 +377,48 @@ def download_negative_datasets(paths: Paths) -> Path:
 # Feature generation
 # ---------------------------------------------------------------------------
 
-def _features_complete(out_dir: Path) -> bool:
+def _features_complete(out_dir: Path, with_teacher_scores: bool = False) -> bool:
     """Return True only if all three split mmaps exist and contain data."""
     for split in ["training", "validation", "testing"]:
         mmap_dir = out_dir / split / "wakeword_mmap"
         if not mmap_dir.exists() or not any(mmap_dir.iterdir()):
             return False
+        if with_teacher_scores and not (out_dir / split / "teacher_scores.npy").exists():
+            return False
     return True
 
 
-def generate_augmented_features(paths: Paths, regen: bool, n_samples: int) -> Path:
+def generate_augmented_features(
+    paths: Paths, regen: bool, n_samples: int, teacher_dir: Path | None = None
+) -> Path:
     """Build augmented spectrogram RaggedMmap datasets for train/val/test splits.
 
     When the sample pool is larger than n_samples, a random balanced subset is
     selected (equal quota per voice) so feature generation stays fast regardless
     of pool size.
+
+    With ``teacher_dir`` set (--distill), every augmented waveform is also
+    scored by the teacher and a per-sample teacher_scores.npy is written next
+    to each split's wakeword_mmap (same sample order by construction).
     """
     import random
     import shutil
 
     out_dir = paths.data_dir / "generated_augmented_features"
     if out_dir.exists():
-        if _features_complete(out_dir) and not regen:
+        if _features_complete(out_dir, with_teacher_scores=teacher_dir is not None) and not regen:
             print("[features] Augmented features already exist, skipping. Use --regen_features to rebuild.")
             return out_dir
+        if _features_complete(out_dir) and teacher_dir is not None and not regen:
+            print("[features] Existing features lack teacher scores — regenerating for --distill.")
         shutil.rmtree(out_dir)
     out_dir.mkdir()
+
+    clip_scorer = None
+    if teacher_dir is not None:
+        from teacher_infer import Teacher
+        print(f"[features] Loading teacher from {teacher_dir} for distillation scoring...")
+        clip_scorer = Teacher(teacher_dir).score_clip
 
     # Build the set of WAVs to augment: randomly sample up to n_samples,
     # balanced across voices that appear in the pool.
@@ -463,7 +499,8 @@ def generate_augmented_features(paths: Paths, regen: bool, n_samples: int) -> Pa
         split_dir.mkdir()
         print(f"[features] Generating {split_dir_name} spectrograms...")
         spectrograms = SpectrogramGeneration(
-            clips=clips, augmenter=augmenter, slide_frames=slide_frames, step_ms=10
+            clips=clips, augmenter=augmenter, slide_frames=slide_frames, step_ms=10,
+            clip_scorer=clip_scorer,
         )
         RaggedMmap.from_generator(
             out_dir=str(split_dir / "wakeword_mmap"),
@@ -473,10 +510,147 @@ def generate_augmented_features(paths: Paths, regen: bool, n_samples: int) -> Pa
             batch_size=100,
             verbose=True,
         )
+        if clip_scorer is not None:
+            # spectrogram_generator appends one score per yielded spectrogram,
+            # in the same order RaggedMmap stored them.
+            scores = np.array(spectrograms.clip_scores, dtype=np.float32)
+            n_specs = len(RaggedMmap(str(split_dir / "wakeword_mmap")))
+            if len(scores) != n_specs:
+                raise RuntimeError(
+                    f"teacher score count ({len(scores)}) != spectrogram count "
+                    f"({n_specs}) for split {split_dir_name}"
+                )
+            np.save(split_dir / "teacher_scores.npy", scores)
+            print(f"[features] Wrote {len(scores)} teacher scores "
+                  f"(mean {scores.mean():.3f}) for {split_dir_name}.")
 
     if samples_dir != pool_dir:
         shutil.rmtree(samples_dir)
 
+    return out_dir
+
+
+def _neg_features_complete(out_dir: Path) -> bool:
+    for split in ["training", "validation", "testing"]:
+        mmap_dir = out_dir / split / "negatives_mmap"
+        if not mmap_dir.exists() or not any(mmap_dir.iterdir()):
+            return False
+    return True
+
+
+def generate_negative_features(
+    paths: Paths, regen: bool, neg_audio_dirs: list[str], cap: int
+) -> Path | None:
+    """Spectrogram-ize raw negative WAVs into a student negative feature source.
+
+    The stock HuggingFace negative spectrograms are English-only speech (see
+    reference), so a non-English student never learns to reject ordinary
+    target-language speech. This turns raw negative WAVs (Piper confusables +
+    real target-language speech) into the same augmented-spectrogram RaggedMmap
+    layout used elsewhere, labelled truth=False via write_training_config.
+
+    Layout produced (mirrors the negative_datasets sources data.py globs):
+        generated_negative_features/{training,validation,testing}/negatives_mmap/
+
+    Returns the feature-source dir, or None if no usable audio was found.
+    """
+    import random
+    import shutil
+
+    dirs = [Path(d) for d in neg_audio_dirs]
+    existing = [d for d in dirs if d.is_dir()]
+    for d in dirs:
+        if not d.is_dir():
+            print(f"[neg-features] skip missing dir: {d}")
+    if not existing:
+        print("[neg-features] no negative audio dirs present — skipping student negatives.")
+        return None
+
+    out_dir = paths.data_dir / "generated_negative_features"
+    if out_dir.exists():
+        if _neg_features_complete(out_dir) and not regen:
+            print("[neg-features] Student negative features already exist, skipping. "
+                  "Use --regen_features to rebuild.")
+            return out_dir
+        shutil.rmtree(out_dir)
+    out_dir.mkdir()
+
+    all_wavs = [w for d in existing for w in d.glob("*.wav")]
+    if not all_wavs:
+        print(f"[neg-features] dirs present but no *.wav found in {existing} — skipping.")
+        shutil.rmtree(out_dir)
+        return None
+
+    random.shuffle(all_wavs)
+    selected = all_wavs[:cap]
+    print(f"[neg-features] {len(all_wavs)} negative WAVs across {len(existing)} dir(s); "
+          f"using {len(selected)} (cap {cap}).")
+
+    # Symlink the selection into one dir so a single Clips reads the whole pool.
+    active_dir = paths.data_dir / "generated_negatives_active"
+    if active_dir.exists():
+        shutil.rmtree(active_dir)
+    active_dir.mkdir()
+    for i, w in enumerate(selected):
+        # unique names so same-named files from different dirs don't collide
+        (active_dir / f"{i:06d}_{w.name}").symlink_to(w.resolve())
+
+    from mmap_ninja.ragged import RaggedMmap
+    from microwakeword.audio.augmentation import Augmentation
+    from microwakeword.audio.clips import Clips
+    from microwakeword.audio.spectrograms import SpectrogramGeneration
+
+    clips = Clips(
+        input_directory=str(active_dir),
+        file_pattern="*.wav",
+        max_clip_duration_s=None,
+        remove_silence=False,
+        random_split_seed=10,
+        split_count=0.1,
+    )
+    # Same augmenter as the positives (background music/ambient + RIR) so the
+    # negatives sit in the same acoustic space as the wake-word clips.
+    augmenter = Augmentation(
+        augmentation_duration_s=3.2,
+        augmentation_probabilities={
+            "SevenBandParametricEQ": 0.1,
+            "TanhDistortion": 0.1,
+            "PitchShift": 0.1,
+            "BandStopFilter": 0.1,
+            "AddBackgroundNoise": 0.75,
+            "Gain": 1.0,
+            "RIR": 0.5,
+        },
+        impulse_paths=[str(paths.downloads_dir / "mit_rirs")],
+        background_paths=[str(paths.downloads_dir / "fma_16k"), str(paths.downloads_dir / "audioset_16k")],
+        background_min_snr_db=-5,
+        background_max_snr_db=10,
+        min_jitter_s=0.195,
+        max_jitter_s=0.205,
+    )
+
+    split_configs = [
+        ("training",   "train",      2, 10),
+        ("validation", "validation", 1, 10),
+        ("testing",    "test",       1,  1),
+    ]
+    for split_dir_name, split_name, repetition, slide_frames in split_configs:
+        split_dir = out_dir / split_dir_name
+        split_dir.mkdir()
+        print(f"[neg-features] Generating {split_dir_name} negative spectrograms...")
+        spectrograms = SpectrogramGeneration(
+            clips=clips, augmenter=augmenter, slide_frames=slide_frames, step_ms=10,
+        )
+        RaggedMmap.from_generator(
+            out_dir=str(split_dir / "negatives_mmap"),
+            sample_generator=spectrograms.spectrogram_generator(
+                split=split_name, repeat=repetition
+            ),
+            batch_size=100,
+            verbose=True,
+        )
+
+    shutil.rmtree(active_dir)
     return out_dir
 
 
@@ -485,11 +659,15 @@ def generate_augmented_features(paths: Paths, regen: bool, n_samples: int) -> Pa
 # ---------------------------------------------------------------------------
 
 def write_training_config(
-    paths: Paths, output_dir: str, steps: int, batch_size: int, neg_class_weight: int
+    paths: Paths, output_dir: str, steps: int, batch_size: int, neg_class_weight: int,
+    distill_weight: float = 0.0,
+    student_neg_dir: Path | None = None, student_neg_weight: float = 5.0,
 ) -> Path:
     config = {
         "window_step_ms": 10,
         "train_dir": output_dir,
+        # Distillation blend λ (0 = disabled). See DISTILLATION.md §5 B3.
+        "distill_weight": distill_weight,
         "features": [
             {
                 "features_dir": str(paths.data_dir / "generated_augmented_features"),
@@ -533,6 +711,16 @@ def write_training_config(
         "minimization_metric": None,
         "maximization_metric": "average_viable_recall",
     }
+
+    # Extra student negatives (Piper confusables + real target-language speech).
+    # truth=False -> hard 0 labels (an ASR teacher could soft-label these later).
+    if student_neg_dir is not None:
+        config["features"].append({
+            "features_dir": str(student_neg_dir),
+            "sampling_weight": student_neg_weight, "penalty_weight": 1.0,
+            "truth": False, "truncation_strategy": "random", "type": "mmap",
+        })
+
     config_path = paths.data_dir / "training_parameters.yaml"
     with open(config_path, "w") as f:
         yaml.dump(config, f)
@@ -623,12 +811,26 @@ if __name__ == "__main__":
         / "stream_state_internal_quant.tflite"
     )
 
+    teacher_dir = None
+    if args.distill:
+        teacher_dir = Path(args.teacher_model) if args.teacher_model else data_dir / "teacher"
+        if not args.dry_run and not (teacher_dir / "head.onnx").exists():
+            sys.exit(
+                f"--distill: no teacher at {teacher_dir} (expected head.onnx). "
+                "Train one first: python train_teacher.py --output_dir "
+                f"{teacher_dir}"
+            )
+    distill_weight = args.distill_weight if args.distill else 0.0
+
     if args.dry_run:
         print("DRY RUN — training plan (nothing downloaded or trained):")
         print(f"  phrase / phonetic : {args.phrase!r} / {phonetic!r}")
         print(f"  voices            : {args.piper_model or ['<default English>']}")
         print(f"  samples / steps   : {args.samples} / {args.steps}")
         print(f"  neg_class_weight  : {args.neg_class_weight}   batch_size: {args.batch_size}")
+        print(f"  distillation      : {f'on, λ={distill_weight}, teacher={teacher_dir}' if args.distill else 'off'}")
+        if args.student_neg_audio_dirs:
+            print(f"  student negatives : {args.student_neg_audio_dirs} (weight {args.student_neg_weight})")
         print(f"  data_dir          : {data_dir}")
         print(f"  downloads_dir     : {downloads_dir}")
         print(f"  output .tflite    : {tflite_path}")
@@ -650,10 +852,21 @@ if __name__ == "__main__":
     download_fma(paths)
     download_negative_datasets(paths)
 
-    generate_augmented_features(paths, regen=args.regen_features, n_samples=args.samples)
+    generate_augmented_features(
+        paths, regen=args.regen_features, n_samples=args.samples, teacher_dir=teacher_dir
+    )
+
+    student_neg_dir = None
+    if args.student_neg_audio_dirs:
+        student_neg_dir = generate_negative_features(
+            paths, regen=args.regen_features,
+            neg_audio_dirs=args.student_neg_audio_dirs, cap=args.samples,
+        )
 
     config_path = write_training_config(
-        paths, args.output_dir, args.steps, args.batch_size, args.neg_class_weight
+        paths, args.output_dir, args.steps, args.batch_size, args.neg_class_weight,
+        distill_weight=distill_weight,
+        student_neg_dir=student_neg_dir, student_neg_weight=args.student_neg_weight,
     )
     run_training(config_path)
 

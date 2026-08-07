@@ -174,6 +174,52 @@ function _parseTFLiteOutputType(ab) {
     } catch(e) { return null; }
 }
 
+// Parse the OUTPUT tensor's quantization (scale, zp). Returns { scale, zp } or null.
+function _parseTFLiteOutputQuant(ab) {
+    try {
+        const { u32, i32, f32, fld, deref, vec } = _makeFbHelpers(ab);
+        const modelRoot = u32(0);
+        const sgFld = fld(modelRoot, 2); if (!sgFld) return null;
+        const sg    = vec(sgFld);        if (sg.len === 0) return null;
+        const sg0   = deref(sg.base);
+        const outFld = fld(sg0, 2); if (!outFld) return null;
+        const outV   = vec(outFld); if (outV.len === 0) return null;
+        const outIdx = i32(outV.base);
+        const tFld   = fld(sg0, 0); if (!tFld) return null;
+        const tVec   = vec(tFld);   if (outIdx >= tVec.len) return null;
+        const tens   = deref(tVec.base + outIdx * 4);
+        for (const fi of [5, 4]) {
+            const qFld = fld(tens, fi); if (!qFld) continue;
+            const q    = deref(qFld);
+            const sFld = fld(q, 2);     if (!sFld) continue;
+            const sv   = vec(sFld);     if (sv.len === 0) continue;
+            const scale = f32(sv.base);
+            if (!(scale > 0 && scale < 1)) continue;
+            let zp = 0;
+            const zFld = fld(q, 3);
+            if (zFld) { const zv = vec(zFld); if (zv.len > 0) zp = i32(zv.base); }
+            return { scale, zp };
+        }
+        return null;
+    } catch(e) { return null; }
+}
+
+// Feed ~60 frames of silence, return the model's stabilized raw output. Detects
+// whether tf-tflite dequantizes the output (≈0 on silence) or returns the raw
+// integer (≈1–2 for uint8). Also flushes streaming state to a clean silence init.
+function _probeSilenceOutput() {
+    if (!_testModel) return 0;
+    const winT = _testModel.inputs[0].shape[1];
+    const sil  = new Int32Array(winT * _NMELS).fill(_testQuantZp);
+    let v = 0;
+    for (let i = 0; i < 60; i++) {
+        const inp = tf.tensor(sil, [1, winT, _NMELS], 'int32');
+        try { const o = _testModel.predict(inp); v = o.dataSync()[0]; o.dispose(); } catch(e) {}
+        inp.dispose();
+    }
+    return v;
+}
+
 // ── Quantization ──────────────────────────────────────────────────────────────
 function _applyQuantMode() {
     const ESP32_QS = 256 / 666;
@@ -306,7 +352,19 @@ async function _loadTestModelBytes(name, ab) {
         if (iq) { _testModelQScale = 1.0 / (25.6 * iq.scale); _testModelQZp = iq.zp; }
         else     { _testModelQScale = 1.0; _testModelQZp = -128; }
         _applyQuantMode();
-        _testOutScale  = (oty === 'UINT8') ? 1.0 : 1.0 / 256.0;
+        // tf-tflite's alpha build returns uint8 outputs as the RAW integer (not a
+        // dequantized [0,1] float, despite older assumptions) — probe with silence
+        // to pick the right scale automatically. (Matches docs/emulator/index.html.)
+        const oq = _parseTFLiteOutputQuant(ab);
+        const outQuantScale = (oq && oq.scale) ? oq.scale : 1.0 / 256.0;
+        if (oty === 'FLOAT32') {
+            _testOutScale = 1.0;
+        } else {
+            const probe = _probeSilenceOutput();   // also silence-primes streaming state
+            _testOutScale = (probe > 0.5) ? outQuantScale : 1.0;
+            console.log(`[test] output probe (silence) = ${probe.toPrecision(4)} → ` +
+                        `${probe > 0.5 ? 'RAW int (scale by ' + outQuantScale.toExponential(2) + ')' : 'already [0,1]'}`);
+        }
         _testInferBuf  = null;
         _testInferCount = 0;
         _testInferLast  = 0;

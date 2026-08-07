@@ -25,6 +25,38 @@ except ImportError:
 _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
 
+# Decoration: make our train/-root shared audio loader importable regardless of
+# cwd, so generated clips are normalized with the SAME resampler the student and
+# teacher use at load time (see audio_io.load_wav_16k).
+import sys as _sys
+from pathlib import Path as _Path
+
+_TRAIN_ROOT = str(_Path(__file__).resolve().parents[1])
+if _TRAIN_ROOT not in _sys.path:
+    _sys.path.insert(0, _TRAIN_ROOT)
+
+
+def _ensure_16k(wav_path) -> None:
+    """Normalize a just-written WAV to 16 kHz mono int16 in place.
+
+    Piper voices synthesize at their native rate (e.g. 22050 Hz for -medium
+    voices); the wake-word pipeline is 16 kHz. Downstream loaders resample
+    anyway, but normalizing on write keeps generated_samples/ at one canonical
+    rate so no future consumer can inherit a foreign rate. No-op when already
+    16 kHz (never touches already-correct files)."""
+    with wave.open(str(wav_path), "rb") as wf:
+        if wf.getframerate() == 16000:
+            return
+    from audio_io import load_wav_16k
+
+    data = load_wav_16k(wav_path)
+    int16 = np.clip(np.round(data * 32768.0), -32768, 32767).astype(np.int16)
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setframerate(16000)
+        wf.setsampwidth(2)
+        wf.setnchannels(1)
+        wf.writeframes(int16.tobytes())
+
 
 # Main generation function
 def generate_samples(
@@ -200,6 +232,7 @@ def generate_samples(
                     wav_file.setsampwidth(2)
                     wav_file.setnchannels(1)
                     wav_file.writeframes(audio_data)
+                _ensure_16k(wav_path)
 
                 sample_idx += 1
                 if sample_idx >= max_samples:
@@ -361,6 +394,7 @@ def generate_samples_onnx(
                         ),
                     )
 
+            _ensure_16k(wav_path)
             sample_idx += 1
             progress.update(1)
             if sample_idx >= max_samples:
