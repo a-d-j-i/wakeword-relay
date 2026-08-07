@@ -67,7 +67,7 @@
   #model-list { margin-top: 8px; }
   .model-row  { display: flex; align-items: center; gap: 5px; padding: 5px 8px;
                 border-radius: 5px; margin-bottom: 3px; background: #1e1e1e;
-                cursor: pointer; transition: background 0.1s; }
+                transition: background 0.1s; }
   .model-row:hover { background: #252525; }
   .model-row.active { background: #162616; border-left: 3px solid #2a6; padding-left: 5px; }
   .model-row .mname { flex: 1; font-size: 0.86em; color: #999; overflow: hidden;
@@ -104,13 +104,39 @@
   tr.hit td { background: #1a2a1a; }
   .progress { color: #888; font-size: 0.9em; margin: 6px 0; }
 
-  /* teacher (B5b) — teal accent to distinguish from the green student */
+  /* teacher (B5b) — teal accent + divider to mark it as a different model type
+     (openWakeWord soft-label reference, not a deployable tflite student) */
   .bar.teacher    { background: #2aa; }
   .bar.teacher.hit{ background: #6cf; }
   .score-num.teacher { color: #2dd; }
-  .dual-row  { display: flex; gap: 26px; flex-wrap: wrap; }
-  .dual-col  { flex: 1 1 200px; min-width: 180px; }
-  .dual-col .who { color: #777; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.05em; }
+  #teacher-col { border-left: 1px dashed #2a6a6a; padding-left: 16px; margin-left: 4px; max-width: 200px; }
+  #teacher-col .who { color: #2aa; }
+  .ttype { display: block; color: #268; font-size: 0.82em; text-transform: none; letter-spacing: 0;
+           margin-top: 1px; white-space: normal; }
+
+  /* detection log table — one column per model (named once in the header), fixed
+     width, newest row on top. Each model has its own cooldown so it logs its own
+     crossings independently. */
+  .logtbl { table-layout: fixed; width: 100%; border-collapse: collapse;
+            margin-top: 0; font-size: 0.8em; }
+  .logtbl th, .logtbl td { padding: 2px 5px; text-align: right; border: none;
+            border-bottom: 1px solid #222; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; }
+  .logtbl th { position: sticky; top: 0; z-index: 1; background: #161616;
+            color: #8ad; font-weight: normal; }
+  .logtbl .lt-time    { text-align: left; color: #888; width: 74px; }
+  .logtbl th.lt-teacher, .logtbl td.lt-teacher { color: #2dd;
+            border-left: 1px dashed #2a6a6a; }
+  .logtbl td.lt-hit  { color: #6f6; font-weight: bold; }   /* this model fired */
+  .logtbl td.lt-over { color: #fa3; }                       /* over thr but cooling down */
+  .logtbl td.lt-lo   { color: #666; }                       /* below threshold */
+  /* live score columns — one per loaded model + teacher; compact so ~6 fit across */
+  .dual-row  { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+  .dual-col  { flex: 1 1 110px; min-width: 92px; max-width: 170px; }
+  .dual-col .who { color: #777; font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.03em;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dual-col.primary .who { color: #6f6; }
+  .dual-col .score-num { font-size: 1.5em; }
   .badge.teacher-on  { background: #14343a; color: #6cf; }
 
   /* clip bank (B5a) */
@@ -198,23 +224,21 @@
         <div id="mic-left">
           <div class="mic-label">mic input</div>
           <canvas id="mic-wave"></canvas>
-          <div class="dual-row" style="margin-top:8px">
-            <div class="dual-col">
-              <div class="who">student</div>
-              <span class="score-num" id="mic-score">—</span>
-              <div class="bar-bg"><div class="bar" id="mic-bar"></div></div>
-            </div>
-            <div class="dual-col" id="teacher-col" style="display:none">
-              <div class="who">teacher</div>
-              <span class="score-num teacher" id="mic-tscore">—</span>
-              <div class="bar-bg"><div class="bar teacher" id="mic-tbar"></div></div>
-            </div>
-          </div>
           <div class="detected" id="mic-detected"></div>
         </div>
         <div id="mic-right">
           <div style="color:#888;font-size:0.85em;margin-bottom:6px">Detection log</div>
           <div id="mic-log"></div>
+        </div>
+      </div>
+      <!-- live scores: one column per loaded model (+ teacher), full panel width -->
+      <div class="mic-label" style="margin-top:14px">live scores — all loaded models run at once</div>
+      <div class="dual-row">
+        <div id="student-cols" style="display:contents"></div>
+        <div class="dual-col" id="teacher-col" style="display:none">
+          <div class="who">teacher<span class="ttype">openWakeWord · reference, not deployed</span></div>
+          <span class="score-num teacher" id="mic-tscore">—</span>
+          <div class="bar-bg"><div class="bar teacher" id="mic-tbar"></div></div>
         </div>
       </div>
       <div id="mic-spec-wrap">
@@ -262,7 +286,7 @@
     <div id="dir-summary"></div>
     <div id="dir-scroll" style="max-height:360px;overflow-y:auto;margin-top:8px">
       <table id="dir-table" style="display:none">
-        <thead><tr><th>File</th><th>Peak score</th><th>Det</th><th>Peak at</th><th>▶</th></tr></thead>
+        <thead><tr id="dir-thead-row"><th>File</th><th>Peak score</th><th>▶</th></tr></thead>
         <tbody id="dir-tbody"></tbody>
       </table>
     </div>
@@ -286,8 +310,16 @@ tf.setBackend('cpu');
 if (window.ort) ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
 
 // ── globals ───────────────────────────────────────────────────────────────────
-let model  = null;
+// Every model in the library runs live and simultaneously so they can be compared
+// frame-by-frame. All per-model state (tflite handle, input/output quant, streaming
+// accumulator, peak window, debug counters) lives in a ModelCtx — see makeModelCtx.
+let loadedModels = [];    // ModelCtx[] — the whole library, all scored everywhere
 let Module = null;  // WASM module (micro frontend + mixednet)
+
+// A representative ctx for the couple of places that still need a single value
+// (the esp32 quant readout, the score stashed on captured clips). There is no
+// model selection any more — every model runs in every tab — so it's just the first.
+function primaryCtx() { return loadedModels[0] || null; }
 
 // ── MicroFrontend constants — must match ESP32 preprocessor_settings.h ────────
 // Window 30ms=480 samples, step 10ms=160 samples, 40 mel bins, 16kHz
@@ -295,14 +327,15 @@ const SR    = 16000;
 const STEP  = 160;   // samples per frame step (10 ms) — matches kWindowStepMs=10
 const NMELS = 40;
 
-// Output scale: maps the raw model output to a probability in [0,1]. Set on model
-// load by output dtype (see loadModelBytes): 1.0 for FLOAT32 outputs (tf-tflite
-// returns the sigmoid float directly), else the quantized tensor's dequant scale
-// (1/256 for every uint8 model we ship — tf-tflite hands those back as raw ints).
-let OUT_SCALE = 1.0 / 256.0;
+// Output scale (per ctx: ctx.outScale): maps the raw model output to a probability
+// in [0,1]. Set on model load by output dtype (see makeModelCtx): 1.0 for FLOAT32
+// outputs (tf-tflite returns the sigmoid float directly), else the quantized
+// tensor's dequant scale (1/256 for every uint8 model we ship — tf-tflite hands
+// those back as raw ints).
 
-// Input quantization. The MicroFrontend emits uint16 features; we map them to the
-// model's int8 input as: int8 = clamp(round(u16 × quantScale) + quantZp, -128, 127).
+// Input quantization (per ctx: ctx.quantScale / ctx.quantZp). The MicroFrontend
+// emits uint16 features; each model maps them to its int8 input as:
+//   int8 = clamp(round(u16 × quantScale) + quantZp, -128, 127).
 //
 // Two modes, selectable via the "ESP32 exact quant" checkbox:
 //  • model mode (default): quantScale = 1/(25.6 × inputScale) read from the model's
@@ -311,19 +344,20 @@ let OUT_SCALE = 1.0 / 256.0;
 //    micro_wake_word uses on-device: int8 = round(u16 × 256/666) − 128
 //    (666 = 25.6 × 26, i.e. it assumes input_scale = 26/256 for every model).
 const ESP32_QUANT_SCALE = 256 / 666;   // ≈ 0.38438
-let esp32Mode      = false;            // overridden by the checkbox / saved pref
-let modelQuantScale = 256 / (25.6 * 26);  // parsed per-model; overwritten on load
-let modelQuantZp    = -128;
-let quantScale = modelQuantScale;      // active values used by the quantizers
-let quantZp    = modelQuantZp;
+let esp32Mode = false;                  // overridden by the checkbox / saved pref
 
-// Apply the active quantization mode to the globals the quantizers read.
+// Recompute every ctx's active quantScale/quantZp for the current esp32 mode, and
+// refresh the readout from the primary model.
 function applyQuantMode() {
-    if (esp32Mode) { quantScale = ESP32_QUANT_SCALE; quantZp = -128; }
-    else           { quantScale = modelQuantScale;   quantZp = modelQuantZp; }
+    for (const ctx of loadedModels) {
+        if (esp32Mode) { ctx.quantScale = ESP32_QUANT_SCALE;   ctx.quantZp = -128; }
+        else           { ctx.quantScale = ctx.modelQuantScale; ctx.quantZp = ctx.modelQuantZp; }
+    }
     const span = document.getElementById('esp32-qinfo');
-    if (span) span.textContent =
-        `qs=${quantScale.toFixed(4)} zp=${quantZp}` + (esp32Mode ? '  (256/666)' : '');
+    const p = primaryCtx();
+    if (span) span.textContent = p
+        ? `qs=${p.quantScale.toFixed(4)} zp=${p.quantZp}` + (esp32Mode ? '  (256/666)' : '')
+        : '';
 }
 
 // ── Viridis colormap ──────────────────────────────────────────────────────────
@@ -482,33 +516,28 @@ function appendSpecFrame(rawFrame) {
 }
 
 // ── Inference ─────────────────────────────────────────────────────────────────
-// Quantize raw Uint8Array spectrogram to int8-range Int32Array for model input.
-// int8 = clamp(round(u8 × quantScale) + quantZp, -128, 127)
-function quantizeFrames(raw, T) {
+// Quantize a raw uint16 spectrogram to a ctx's int8-range Int32Array model input.
+// int8 = clamp(round(u16 × quantScale) + quantZp, -128, 127)
+function quantizeFrames(ctx, raw, T) {
     const q = new Int32Array(T * NMELS);
     for (let i = 0; i < T * NMELS; i++)
-        q[i] = Math.max(-128, Math.min(127, Math.round(raw[i] * quantScale) + quantZp));
+        q[i] = Math.max(-128, Math.min(127, Math.round(raw[i] * ctx.quantScale) + ctx.quantZp));
     return q;
 }
 
 // Frame accumulator for streaming-internal models with input shape [1,T,40], T>1.
 // These ingest T NEW frames per invocation and keep history in internal ring buffers
-// — so we feed non-overlapping T-frame chunks, NOT a sliding window. Reset on model
-// load / mic start.
-let inferBuf  = null;
-let inferFill = 0;   // # of new frames accumulated into inferBuf so far
-
-function resetInferBuf() {
-    if (!model) return;
-    const T = model.inputs[0].shape[1];
-    inferBuf  = new Int32Array(T * NMELS);  // zero-filled = silence padding
-    inferFill = 0;
+// — so we feed non-overlapping T-frame chunks, NOT a sliding window. Each ctx owns
+// its own accumulator (ctx.inferBuf / ctx.inferFill); reset on model load / mic start.
+function resetInferBuf(ctx) {
+    ctx.inferBuf  = new Int32Array(ctx.winT * NMELS);  // zero-filled = silence padding
+    ctx.inferFill = 0;
 }
 
-// Feed one frame (Int32Array(40)) through the model.
+// Feed one frame (Int32Array(40)) through a ctx's model, advancing its stream state.
 // Handles both per-frame streaming [1,1,40] and stride-T streaming [1,T,40] models.
-function inferOneFrame(q) {
-    const T   = model.inputs[0].shape[1];
+function inferOneFrame(ctx, q) {
+    const T = ctx.winT;
     let   buf;
 
     if (T === 1) {
@@ -518,46 +547,50 @@ function inferOneFrame(q) {
         // Accumulate T new frames, then predict once. The model's internal state
         // carries history across calls; feeding an overlapping sliding window every
         // frame advances that state T× too fast and pins the output near 0.
-        if (!inferBuf || inferBuf.length !== T * NMELS) resetInferBuf();
-        inferBuf.set(q.subarray(0, NMELS), inferFill * NMELS);
-        inferFill++;
-        if (inferFill < T) return inferOneFrame._lastScore || 0;  // wait for a full chunk
-        inferFill = 0;
-        buf = inferBuf;
+        if (!ctx.inferBuf || ctx.inferBuf.length !== T * NMELS) resetInferBuf(ctx);
+        ctx.inferBuf.set(q.subarray(0, NMELS), ctx.inferFill * NMELS);
+        ctx.inferFill++;
+        if (ctx.inferFill < T) return ctx.lastScore || 0;  // wait for a full chunk
+        ctx.inferFill = 0;
+        buf = ctx.inferBuf;
     }
 
     const inp = tf.tensor(buf, [1, T, NMELS], 'int32');
     let s = 0;
     try {
-        const out = model.predict(inp);
+        const out = ctx.model.predict(inp);
         const raw = out.dataSync()[0];
-        inferOneFrame._count = (inferOneFrame._count || 0) + 1;
-        if (inferOneFrame._count === 1)
-            console.log('[infer] model in:', JSON.stringify(model.inputs[0].shape), model.inputs[0].dtype,
-                        ' out:', JSON.stringify(model.outputs[0].shape), '  T=', T);
-        if (inferOneFrame._count % 100 === 0 || raw > 10)
-            console.log('[infer] frame', inferOneFrame._count,
+        ctx.count = (ctx.count || 0) + 1;
+        if (ctx.count === 1)
+            console.log(`[infer:${ctx.name}] in:`, JSON.stringify(ctx.model.inputs[0].shape), ctx.model.inputs[0].dtype,
+                        ' out:', JSON.stringify(ctx.model.outputs[0].shape), '  T=', T);
+        if (ctx.count % 100 === 0 || raw > 10)
+            console.log(`[infer:${ctx.name}] frame`, ctx.count,
                         'in[0..4]:', Array.from(buf.slice(0, 5)),
-                        'raw:', raw, '→', (raw * OUT_SCALE).toFixed(4));
-        s = raw * OUT_SCALE;
+                        'raw:', raw, '→', (raw * ctx.outScale).toFixed(4));
+        s = raw * ctx.outScale;
         out.dispose();
     } catch(e) {
-        if (!inferOneFrame._errOnce) {
-            inferOneFrame._errOnce = true;
-            console.error('[infer] model.predict error:', e);
+        if (!ctx.errOnce) {
+            ctx.errOnce = true;
+            console.error(`[infer:${ctx.name}] model.predict error:`, e);
         }
     }
     inp.dispose();
-    inferOneFrame._lastScore = s;
+    ctx.lastScore = s;
     return s;
 }
 
-// Frame-by-frame inference over a WAV file (doesn't touch the mic's inferBuf).
-// Returns { scores: number[], peakRaw: number|null } — peakRaw is the max raw model output
-// before OUT_SCALE multiplication (useful for diagnosing output quantization issues).
-function runInference(raw, T) {
-    const frames = quantizeFrames(raw, T);
-    const winT   = model.inputs[0].shape[1];
+// Frame-by-frame inference over a WAV file for one ctx (doesn't touch the mic's
+// per-ctx accumulator — it primes its own silence run). Returns
+// { scores: number[], peakRaw: number|null } — peakRaw is the max raw model output
+// before outScale multiplication (useful for diagnosing output quantization issues).
+function runInference(ctx, raw, T) {
+    const frames = quantizeFrames(ctx, raw, T);
+    const winT   = ctx.winT;
+    const model  = ctx.model;
+    const OUT_SCALE = ctx.outScale;
+    const quantZp   = ctx.quantZp;
 
     // Streaming state tensors in TFLite.js are initialised to byte value 0.
     // For INT8 quantisation with zp=-128 that means float=+12.8 instead of 0.
@@ -576,7 +609,7 @@ function runInference(raw, T) {
     let peakRaw  = null;
     if (winT === 1) {
         for (let i = 0; i < T; i++)
-            scores.push(inferOneFrame(frames.subarray(i * NMELS, (i+1) * NMELS)));
+            scores.push(inferOneFrame(ctx, frames.subarray(i * NMELS, (i+1) * NMELS)));
     } else {
         // Stride-T streaming model: feed non-overlapping T-frame chunks (internal state
         // carries history). Push the chunk's score for each of its T frames so the
@@ -863,164 +896,171 @@ const esp32Checkbox = document.getElementById('esp32-mode');
 esp32Checkbox.onchange = () => {
     esp32Mode = esp32Checkbox.checked;
     applyQuantMode();
+    if (loadedModels.length)   // refresh the per-model qs= readout in the info pane
+        document.getElementById('out-model').textContent = describeModels();
     prefSet('esp32Mode', esp32Mode);
 };
 
-// Restore tab + last model on load.
+// Restore tab on load, then load EVERY stored model so they all run everywhere.
 loadTab().then(tab => switchRightTab(tab));
 (async () => {
     esp32Mode = await prefGet('esp32Mode', false);
     esp32Checkbox.checked = esp32Mode;
-    applyQuantMode();
-    await renderModelList();
-    const last = await prefGet('lastModel', null);
-    if (last) { const ab = await modelGet(last); if (ab) await loadModelBytes(last, ab); }
+    await loadAllModels();
 })();
 
 // ════════════════════════════════════════════════════════════════════
-// 1. MODEL LIBRARY
+// 1. MODEL LIBRARY — every model in the library runs in every tab at once.
+// There is no "selected" model: the threshold slider is global and a detection
+// is any model crossing it, so selection would change nothing.
 // ════════════════════════════════════════════════════════════════════
-let currentModelName = null;
+const short = name => name.replace(/\.tflite$/i, '');
 
-async function loadModelBytes(name, ab) {
-    const out = document.getElementById('out-model');
-    out.textContent = 'Loading…';
-    try {
-        model = await tflite.loadTFLiteModel(ab);
-
-        const iq  = parseTFLiteInputQuant(ab);
-        const oty = parseTFLiteOutputType(ab);
-        if (iq) { modelQuantScale = 1.0 / (25.6 * iq.scale); modelQuantZp = iq.zp; }
-        else     { modelQuantScale = 1.0; modelQuantZp = -128; }
-        applyQuantMode();   // sets active quantScale/quantZp (respects ESP32 toggle)
-        // Output scaling, keyed off the output tensor dtype (deterministic, no probe):
-        //  • FLOAT32 output (some dev-era models): tf-tflite returns the sigmoid float
-        //    directly in [0,1] → OUT_SCALE = 1.0.
-        //  • quantized output (every model we ship: uint8, scale 1/256, zp 0):
-        //    tf-tflite hands back the raw integer 0..255 → scale by the tensor's own
-        //    dequant scale to recover the probability.
-        if (oty === 'FLOAT32') {
-            OUT_SCALE = 1.0;
-        } else {
-            const oq = parseTFLiteOutputQuant(ab);
-            OUT_SCALE = (oq && oq.scale) ? oq.scale : 1.0 / 256.0;
-        }
-        inferOneFrame._count     = 0;
-        inferOneFrame._errOnce   = false;
-        inferOneFrame._lastScore = 0;
-        inferBuf = null;   // forces resetInferBuf() (also clears inferFill) on next frame
-
-        currentModelName = name;
-        await prefSet('lastModel', name);
-
-        out.textContent =
-            model.inputs.map(t  => `in:  ${t.name} ${JSON.stringify(t.shape)} ${t.dtype}`).join('\n') + '\n' +
-            model.outputs.map(t => `out: ${t.name} ${JSON.stringify(t.shape)} ${t.dtype}`).join('\n') +
-            (oty ? `  [${oty}]` : '') + '\n' +
-            (iq ? `quant: scale=${iq.scale.toExponential(3)} zp=${iq.zp} → qs=${quantScale.toFixed(4)}`
-                : `quant: not found — using qs=1.0 zp=-128`) + '\n' +
-            `out_scale: ${OUT_SCALE} (${oty ?? 'unknown'} output)`;
-
-        const tabs = document.getElementById('section-tabs');
-        tabs.classList.remove('locked'); tabs.classList.add('unlocked');
-        const badge = document.getElementById('model-badge');
-        badge.textContent = name.replace(/\.tflite$/i, '');
-        badge.className = 'badge loaded';
-        document.getElementById('btn-mic-start').disabled = false;
-        document.getElementById('btn-test').disabled = !document.getElementById('audio-file').files.length;
-        document.getElementById('btn-scan').disabled = !document.getElementById('dir-input').files.length;
-
-        renderModelList();
-    } catch(err) { out.textContent = 'ERROR: ' + err; console.error(err); }
+// Build a ModelCtx from tflite bytes: load the interpreter, parse input/output
+// quant, and initialise per-model streaming state. Throws on load failure.
+async function makeModelCtx(name, ab) {
+    const model = await tflite.loadTFLiteModel(ab);
+    const iq  = parseTFLiteInputQuant(ab);
+    const oty = parseTFLiteOutputType(ab);
+    const modelQuantScale = iq ? 1.0 / (25.6 * iq.scale) : 1.0;
+    const modelQuantZp    = iq ? iq.zp : -128;
+    // Output scaling by output dtype (deterministic, no probe): FLOAT32 → 1.0
+    // (tf-tflite returns the sigmoid float); quantized → the tensor's own dequant
+    // scale (1/256 for every uint8 model we ship, handed back as a raw int).
+    let outScale;
+    if (oty === 'FLOAT32') outScale = 1.0;
+    else { const oq = parseTFLiteOutputQuant(ab); outScale = (oq && oq.scale) ? oq.scale : 1.0 / 256.0; }
+    return {
+        name, model, iq, oty,
+        winT: model.inputs[0].shape[1],
+        modelQuantScale, modelQuantZp,
+        quantScale: modelQuantScale, quantZp: modelQuantZp,  // overwritten by applyQuantMode
+        outScale,
+        inferBuf: null, inferFill: 0,             // per-model streaming accumulator
+        lastScore: 0, count: 0, errOnce: false,
+        scoreBuf: new Array(5).fill(0),           // per-model 5-frame peak window
+        peak: 0,                                  // max of scoreBuf (current live score)
+        cooldown: 0,                              // per-model refractory countdown (frames)
+        el: null,                                 // live-column DOM refs (renderScoreCols)
+    };
 }
 
-async function renderModelList() {
-    const keys   = (await modelKeys()).sort();
-    const list   = document.getElementById('model-list');
-    const cursor = cursorModelName ?? currentModelName;
+// Load every stored model not already loaded; keep the array sorted by name.
+async function loadAllModels() {
+    const keys = (await modelKeys()).sort();
+    for (const name of keys) {
+        if (loadedModels.some(c => c.name === name)) continue;
+        try {
+            const ab = await modelGet(name);
+            if (ab) loadedModels.push(await makeModelCtx(name, ab));
+        } catch(err) { console.error(`[model:${name}] load failed:`, err); }
+    }
+    loadedModels.sort((a, b) => a.name.localeCompare(b.name));
+    applyQuantMode();
+    refreshModelUI();
+}
+
+// Reflect the loaded set into the UI: badge, info pane, tab lock, buttons, columns.
+function refreshModelUI() {
+    const badge = document.getElementById('model-badge');
+    const tabs  = document.getElementById('section-tabs');
+    const n = loadedModels.length;
+    if (n) {
+        badge.textContent = n === 1 ? short(loadedModels[0].name) : `${n} models`;
+        badge.className   = 'badge loaded';
+        tabs.classList.remove('locked'); tabs.classList.add('unlocked');
+    } else {
+        badge.textContent = 'none'; badge.className = 'badge unloaded';
+        tabs.classList.remove('unlocked'); tabs.classList.add('locked');
+    }
+    document.getElementById('btn-mic-start').disabled = !n;
+    document.getElementById('btn-test').disabled = !(n && document.getElementById('audio-file').files.length);
+    document.getElementById('btn-scan').disabled = !(n && document.getElementById('dir-input').files.length);
+    document.getElementById('out-model').textContent = describeModels();
+    renderModelList();
+    renderScoreCols();
+    renderMicLog();
+}
+
+// (Re)build the detection-log table header: time + one column per model (+ teacher).
+// Clears existing rows — old rows belong to a different column set anyway.
+function renderMicLog() {
+    const log = document.getElementById('mic-log');
+    if (!log) return;
+    const withTeacher = !!(teacher && teacher.loaded);
+    let head = '<th class="lt-time">time</th>' +
+        loadedModels.map(c => `<th title="${c.name}">${short(c.name)}</th>`).join('');
+    if (withTeacher) head += '<th class="lt-teacher" title="openWakeWord teacher (reference)">teacher</th>';
+    log.innerHTML = `<table class="logtbl"><thead><tr>${head}</tr></thead><tbody id="mic-log-body"></tbody></table>`;
+}
+
+function describeModels() {
+    if (!loadedModels.length) return 'Add a .tflite file.';
+    return loadedModels.map(c => {
+        const q = c.iq ? `qs=${c.quantScale.toFixed(3)} zp=${c.quantZp}` : 'qs=1.0 zp=-128';
+        return `${short(c.name)}  [${c.oty || '?'}] T=${c.winT}  ${q}  out×${c.outScale.toExponential(1)}`;
+    }).join('\n') + '\n\nAll models run in every tab; the threshold slider is shared.';
+}
+
+// One compact live-score column per loaded model, inserted before the teacher col.
+function renderScoreCols() {
+    const wrap = document.getElementById('student-cols');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    for (const ctx of loadedModels) {
+        const col = document.createElement('div');
+        col.className = 'dual-col';
+        col.title = ctx.name;
+        const who = document.createElement('div'); who.className = 'who'; who.textContent = short(ctx.name);
+        const num = document.createElement('span'); num.className = 'score-num'; num.textContent = '—';
+        const bg  = document.createElement('div'); bg.className = 'bar-bg';
+        const bar = document.createElement('div'); bar.className = 'bar';
+        bg.appendChild(bar);
+        col.append(who, num, bg);
+        wrap.appendChild(col);
+        ctx.el = { num, bar };
+    }
+}
+
+// The library list is just for viewing / removing models now — no selection.
+function renderModelList() {
+    const list = document.getElementById('model-list');
     list.innerHTML = '';
-    keys.forEach(name => {
-        const short = name.replace(/\.tflite$/i, '');
-        const row   = document.createElement('div');
-        row.className = 'model-row' +
-            (name === currentModelName ? ' active'  : '') +
-            (name === cursor           ? ' focused' : '');
+    loadedModels.forEach(ctx => {
+        const name = ctx.name;
+        const row  = document.createElement('div');
+        row.className = 'model-row';
         row.dataset.name = name;
-        row.onclick = () => { cursorModelName = null; switchModel(name); };
-
         const lbl = document.createElement('span');
-        lbl.className   = 'mname';
-        lbl.textContent = short;
-
+        lbl.className = 'mname'; lbl.textContent = short(name);
         const del = document.createElement('button');
-        del.className   = 'del';
-        del.title       = 'Remove';
-        del.textContent = '✕';
+        del.className = 'del'; del.title = 'Remove'; del.textContent = '✕';
         del.onclick = e => { e.stopPropagation(); deleteModel(name); };
-
-        row.appendChild(lbl);
-        row.appendChild(del);
+        row.append(lbl, del);
         list.appendChild(row);
     });
 }
 
-document.addEventListener('keydown', async e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    const keys = (await modelKeys()).sort();
-    if (!keys.length) return;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        const base = cursorModelName ?? currentModelName;
-        const idx  = base ? keys.indexOf(base) : -1;
-        cursorModelName = e.key === 'ArrowDown'
-            ? keys[(idx + 1) % keys.length]
-            : keys[(idx - 1 + keys.length) % keys.length];
-        renderModelList();
-        document.querySelector(`[data-name="${CSS.escape(cursorModelName)}"]`)
-                ?.scrollIntoView({ block: 'nearest' });
-    } else if (cursorModelName) {
-        await switchModel(cursorModelName);
-        cursorModelName = null;
-        renderModelList();
-    }
-});
-
-async function switchModel(name) {
-    const ab = await modelGet(name);
-    if (ab) await loadModelBytes(name, ab);
-}
-
-// Keyboard model navigation: ↑/↓ move cursor, Enter/Space loads highlighted model.
-let cursorModelName = null;
-
 async function deleteModel(name) {
     await modelDel(name);
-    if (currentModelName === name) {
-        currentModelName = null; model = null;
-        document.getElementById('out-model').textContent = 'Add a .tflite file.';
-        const badge = document.getElementById('model-badge');
-        badge.textContent = 'none'; badge.className = 'badge unloaded';
-        const tabs = document.getElementById('section-tabs');
-        tabs.classList.remove('unlocked'); tabs.classList.add('locked');
-        await prefSet('lastModel', null);
-    }
-    renderModelList();
+    const i = loadedModels.findIndex(c => c.name === name);
+    if (i >= 0) { const [ctx] = loadedModels.splice(i, 1); try { ctx.model.dispose?.(); } catch(_) {} }
+    applyQuantMode();
+    refreshModelUI();
 }
 
 document.getElementById('model-file').onchange = async e => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
     e.target.value = '';  // reset so same files can be re-added
-    let lastFile = null, lastAb = null;
     for (const file of files) {
         const ab = await file.arrayBuffer();
         await modelPut(file.name, ab);
-        lastFile = file.name; lastAb = ab;
+        // Drop any existing ctx of the same name so loadAllModels rebuilds it fresh.
+        const i = loadedModels.findIndex(c => c.name === file.name);
+        if (i >= 0) { try { loadedModels[i].model.dispose?.(); } catch(_) {} loadedModels.splice(i, 1); }
     }
-    await renderModelList();
-    // Auto-load only when adding a single file; with multiple, just store them all.
-    if (files.length === 1) await loadModelBytes(lastFile, lastAb);
+    await loadAllModels();
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -1056,7 +1096,7 @@ document.getElementById('audio-file').onchange = e => {
     const f = e.target.files[0];
     _stopPlayback();
     document.getElementById('audio-file-name').textContent = f ? f.name : '';
-    document.getElementById('btn-test').disabled = !(model && f);
+    document.getElementById('btn-test').disabled = !(primaryCtx() && f);
     document.getElementById('btn-play-wav').disabled = !f;
 };
 
@@ -1067,26 +1107,38 @@ document.getElementById('btn-test').onclick = async () => {
     specCanvas.style.display = 'none';
     try {
         if (!Module) throw new Error('WASM not ready — reload the page or serve via HTTP, not file://');
+        if (!loadedModels.length) throw new Error('No model loaded');
         const audio = await loadWav(await document.getElementById('audio-file').files[0].arrayBuffer());
         const res   = runFrontend(audio);
         if (!res) throw new Error('MicroFrontend failed');
         const { raw, T } = res;
         drawSpectrogram(specCanvas, raw, T);
-        const { scores, peakRaw } = runInference(raw, T);
+        const thr = parseFloat(thrSlider.value);
 
-        const maxScore = scores.length ? Math.max.apply(null, scores) : 0;
-        const maxIdx   = scores.indexOf(maxScore);
-        const thr      = parseFloat(thrSlider.value);
-        const det      = maxScore >= thr;
-        const hdrColor = det ? '#fa3' : '#eee';
-        const rawInfo  = peakRaw !== null
-            ? `  raw_out: ${Math.abs(peakRaw) < 0.0001 ? peakRaw.toExponential(3) : peakRaw.toPrecision(5)} × ${OUT_SCALE.toFixed(6)} = ${(peakRaw*OUT_SCALE).toPrecision(4)}`
-            : '';
-        const hdr      = `Duration: ${(audio.length/SR).toFixed(2)}s  Frames: ${T}${rawInfo}\n` +
-            `Peak: ${maxScore.toFixed(4)} at ${(maxIdx*STEP/SR).toFixed(3)}s` +
-            `  <span style="color:${hdrColor}">${det ? '✓ DETECTED' : '✗ not detected'}</span>`;
-        out.innerHTML = `<div style="white-space:pre-wrap;margin-bottom:4px">${hdr}</div>` +
-                        timelineHtml(scores, thr);
+        // Score the file with EVERY loaded model (+ teacher) for a side-by-side row.
+        const rows = loadedModels.map(ctx => {
+            const { scores } = runInference(ctx, raw, T);
+            const peak = scores.length ? Math.max.apply(null, scores) : 0;
+            const at   = (scores.indexOf(peak) * STEP / SR);
+            return { name: short(ctx.name), peak, at, det: peak >= thr, teacher: false };
+        });
+        if (teacher && teacher.loaded) {
+            try { const r = await teacher.scoreTimeline(audio);
+                  rows.push({ name: 'teacher', peak: r.peak, at: null, det: r.peak >= thr, teacher: true }); }
+            catch(e) { console.warn('[wav] teacher score failed:', e); }
+        }
+
+        const body = rows.map(r => {
+            const col = r.teacher ? '#2dd' : (r.det ? '#6f6' : '#888');
+            return `<tr${r.det ? ' class="hit"' : ''}>` +
+                `<td style="color:${col}">${r.name}${r.teacher ? ' <span style="color:#2aa">· teacher</span>' : ''}</td>` +
+                `<td style="color:${col}"><b>${r.peak.toFixed(4)}</b></td>` +
+                `<td>${r.at == null ? '—' : r.at.toFixed(3) + 's'}</td>` +
+                `<td>${r.det ? '✓' : '✗'}</td></tr>`;
+        }).join('');
+        out.innerHTML =
+            `<div style="white-space:pre-wrap;margin-bottom:8px">Duration: ${(audio.length/SR).toFixed(2)}s  Frames: ${T}  ·  threshold ${thr.toFixed(2)}</div>` +
+            `<table><thead><tr><th>Model</th><th>Peak</th><th>Peak@</th><th>Det</th></tr></thead><tbody>${body}</tbody></table>`;
     } catch(err) { out.textContent = 'ERROR: ' + err; }
 };
 
@@ -1101,63 +1153,69 @@ document.getElementById('btn-play-wav').onclick = () => {
 document.getElementById('dir-input').onchange = e => {
     const n = e.target.files.length;
     document.getElementById('dir-input-name').textContent = n ? `${n} files` : '';
-    document.getElementById('btn-scan').disabled = !(model && n);
+    document.getElementById('btn-scan').disabled = !(loadedModels.length && n);
 };
 
+// Scan a directory against EVERY loaded tflite model, one peak column per model.
+// (The ONNX teacher is skipped here — it's ~10× slower and would stall a bulk scan;
+// use the Live-mic / Test-WAV tabs to see the teacher.)
 document.getElementById('btn-scan').onclick = async () => {
     if (!Module) { alert('WASM not ready — wait a moment and try again.'); return; }
+    if (!loadedModels.length) { alert('No model loaded.'); return; }
     const files = Array.from(document.getElementById('dir-input').files)
         .filter(f => f.name.toLowerCase().endsWith('.wav'))
         .sort((a, b) => a.name.localeCompare(b.name));
     if (!files.length) return;
+    const models  = loadedModels.slice();   // snapshot for a stable column set
+    const thr     = parseFloat(thrSlider.value);
     const tbody   = document.getElementById('dir-tbody');
     const prog    = document.getElementById('dir-progress');
     const summary = document.getElementById('dir-summary');
+    document.getElementById('dir-thead-row').innerHTML =
+        '<th>File</th>' + models.map(m => `<th>${short(m.name)}</th>`).join('') + '<th>▶</th>';
     tbody.innerHTML = '';
     document.getElementById('dir-table').style.display = 'table';
     summary.textContent = '';
-    let detected = 0;
+    const detCounts = models.map(() => 0);
     for (let i = 0; i < files.length; i++) {
         prog.textContent = `${i+1} / ${files.length}  —  ${files[i].name}`;
+        const _f = files[i];
         try {
-            const audio = await loadWav(await files[i].arrayBuffer());
+            const audio = await loadWav(await _f.arrayBuffer());
             const res   = runFrontend(audio);
             if (!res) throw new Error('Frontend (WASM MicroFrontend) returned null');
             const { raw, T } = res;
-            const { scores } = runInference(raw, T);
-            const maxScore = scores.length ? Math.max.apply(null, scores) : 0;
-            const maxIdx   = scores.indexOf(maxScore);
-            const thr      = parseFloat(thrSlider.value);
-            const det      = maxScore >= thr;
-            if (det) detected++;
+            let anyDet = false;
+            const cells = models.map((ctx, mi) => {
+                const { scores } = runInference(ctx, raw, T);
+                const peak = scores.length ? Math.max.apply(null, scores) : 0;
+                const det  = peak >= thr;
+                if (det) { detCounts[mi]++; anyDet = true; }
+                return `<td style="color:${det ? '#6f6' : '#888'}${det ? ';font-weight:bold' : ''}">${peak.toFixed(3)}</td>`;
+            });
             const row = tbody.insertRow();
-            if (det) row.className = 'hit';
-            row.innerHTML =
-                `<td>${files[i].name}</td>` +
-                `<td style="color:${det?'#6f6':'#888'}">${maxScore.toFixed(3)}</td>` +
-                `<td>${det ? '✓' : '✗'}</td>` +
-                `<td>${(maxIdx*STEP/SR).toFixed(3)}s</td>`;
+            if (anyDet) row.className = 'hit';
+            row.innerHTML = `<td>${_f.name}</td>` + cells.join('');
             const pb = document.createElement('button');
             pb.className = 'play-btn'; pb.textContent = '▶';
-            const _f = files[i];
             pb.onclick = () => playFile(_f, pb);
             row.insertCell().appendChild(pb);
         } catch(err) {
-            console.error('Scan error [' + files[i].name + ']:', err);
+            console.error('Scan error [' + _f.name + ']:', err);
             const errRow = tbody.insertRow();
             errRow.innerHTML =
-                `<td>${files[i].name}</td>` +
-                `<td colspan="3" style="color:#a33">ERROR: ${err.message || err}</td>`;
+                `<td>${_f.name}</td>` +
+                `<td colspan="${models.length}" style="color:#a33">ERROR: ${err.message || err}</td>`;
             const pb = document.createElement('button');
             pb.className = 'play-btn'; pb.textContent = '▶';
-            const _f = files[i];
             pb.onclick = () => playFile(_f, pb);
             errRow.insertCell().appendChild(pb);
         }
         await new Promise(r => setTimeout(r, 0));
     }
     prog.textContent = '';
-    summary.textContent = `${detected} / ${files.length} detected  (${(detected/files.length*100).toFixed(0)}%)`;
+    summary.innerHTML = `<b>Detections</b> (thr ${thr.toFixed(2)}): ` +
+        models.map((m, mi) => `${short(m.name)} ${detCounts[mi]}/${files.length}`).join('&nbsp;&nbsp;·&nbsp;&nbsp;');
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -1171,18 +1229,20 @@ let micCtx     = null;
 let micRunning = false;
 let micFE      = null;   // WASM Frontend instance
 let micFeatPtr = null;   // pre-allocated 40-byte feature buffer in WASM heap
-let micScoreBuf = new Array(5).fill(0);   // 5-frame peak window (50 ms)
-let micCooldown = 0;
 let micLeftover = new Float32Array(0);
 
-// 200 frames × 10 ms = 2 s cooldown between detections
+// 200 frames × 10 ms = 2 s refractory window, applied PER MODEL so one model
+// firing never silences another's detection.
 const COOLDOWN_FRAMES = 200;
 
 function micReset() {
-    micScoreBuf = new Array(5).fill(0);
-    micCooldown = 0;
     micLeftover = new Float32Array(0);
-    inferBuf    = null;   // flush rolling window so new session starts silent
+    for (const ctx of loadedModels) {      // flush every model's stream + peak window
+        ctx.scoreBuf.fill(0);
+        ctx.inferBuf = null; ctx.inferFill = 0; ctx.lastScore = 0; ctx.peak = 0;
+        ctx.cooldown = 0;
+    }
+    renderMicLog();       // fresh log for the new session (matches current columns)
     ringReset();          // clear teacher/clip-capture audio history
     teacherScore = 0;
     updateTeacherUI(0);
@@ -1190,7 +1250,9 @@ function micReset() {
 }
 
 // Feed one STEP-sample chunk through the WASM frontend.
-// Returns { raw: Uint8Array(40), quantized: Int32Array(40) } or null if no frame yet.
+// Returns { raw: Uint16Array(40) } of frontend features, or null if no frame yet.
+// Quantization is per-model, so we hand back the shared raw features and let each
+// ctx apply its own input scale in micOnFrame.
 function micProcessStep(chunk) {
     if (!Module || !micFE) return null;
     const int16 = new Int16Array(chunk.length);
@@ -1203,54 +1265,78 @@ function micProcessStep(chunk) {
         [micFE, pcmPtr, int16.length, micFeatPtr]);
     Module._free(pcmPtr);
     if (nFrames === 0) return null;
-    const raw      = new Uint16Array(NMELS);
-    const quantized = new Int32Array(NMELS);
+    const raw  = new Uint16Array(NMELS);
     const base = micFeatPtr >> 1;  // HEAPU16 is indexed in 16-bit words
-    for (let i = 0; i < NMELS; i++) {
-        const u16 = Module.HEAPU16[base + i];
-        raw[i]      = u16;
-        quantized[i] = Math.max(-128, Math.min(127, Math.round(u16 * quantScale) + quantZp));
-    }
-    return { raw, quantized };
+    for (let i = 0; i < NMELS; i++) raw[i] = Module.HEAPU16[base + i];
+    return { raw };
 }
 
-function micOnFrame({ raw, quantized }) {
+// Score EVERY loaded model on one frame of shared frontend features, then refresh
+// the UI. Each ctx keeps its own stream state + peak window, so the models stay
+// independent and directly comparable.
+function micOnFrame({ raw }) {
     appendSpecFrame(raw);
-
-    const score = inferOneFrame(quantized);
-    micScoreBuf.shift(); micScoreBuf.push(score);
-    return Math.max(...micScoreBuf);
+    for (const ctx of loadedModels) {
+        const q = quantizeFrames(ctx, raw, 1);      // per-model input quantization
+        const s = inferOneFrame(ctx, q);
+        ctx.scoreBuf.shift(); ctx.scoreBuf.push(s);
+        ctx.peak = Math.max(...ctx.scoreBuf);
+    }
+    updateMicUI();
 }
 
-function updateMicUI(score) {
-    if (score === null) return;
+function updateMicUI() {
     const thr   = parseFloat(thrSlider.value);
-    const bar   = document.getElementById('mic-bar');
     const panel = document.getElementById('mic-panel');
-    studentScore = score;
-    document.getElementById('mic-score').textContent = score.toFixed(4);
-    bar.style.width = Math.min(100, score*100).toFixed(1) + '%';
-    bar.className   = 'bar' + (score >= thr ? ' hit' : '');
 
-    if (score >= thr && micCooldown === 0) {
-        micCooldown = COOLDOWN_FRAMES;
+    // Update every model's live column, and find which models fire THIS frame:
+    // over threshold AND not in their own refractory window. Per-model cooldown
+    // means one model firing never suppresses another's detection.
+    const fired = [];
+    for (const ctx of loadedModels) {
+        if (!ctx.el) { /* column not built yet */ }
+        else {
+            ctx.el.num.textContent = ctx.peak.toFixed(4);
+            ctx.el.bar.style.width = Math.min(100, ctx.peak * 100).toFixed(1) + '%';
+            ctx.el.bar.className    = 'bar' + (ctx.peak >= thr ? ' hit' : '');
+        }
+        if (ctx.peak >= thr && ctx.cooldown === 0) fired.push(ctx);
+    }
+    studentScore = primaryCtx()?.peak ?? 0;   // stash for clip capture (first model)
+
+    if (fired.length) {
+        for (const ctx of fired) ctx.cooldown = COOLDOWN_FRAMES;
         const ts = new Date().toLocaleTimeString();
-        document.getElementById('mic-detected').textContent = `DETECTED  ${ts}  (${score.toFixed(3)})`;
+        logDetectionRow(ts, thr, new Set(fired));
+        document.getElementById('mic-detected').textContent =
+            `DETECTED  ${ts}  ${fired.map(c => short(c.name)).join(', ')}`;
         if (document.getElementById('auto-capture').checked) captureClip();
         panel.classList.remove('flash'); void panel.offsetWidth;
         panel.classList.add('flash');
         setTimeout(() => panel.classList.remove('flash'), 600);
         playBeep();
-        const log = document.getElementById('mic-log');
-        const el  = document.createElement('div');
-        el.className = 'entry hit';
-        el.textContent = `${ts}  score=${score.toFixed(4)}`;
-        log.insertBefore(el, log.firstChild);
-        while (log.children.length > 20) log.removeChild(log.lastChild);
-    } else if (score < thr * 0.6) {
-        document.getElementById('mic-detected').textContent = '';
     }
-    if (micCooldown > 0) micCooldown--;
+
+    for (const ctx of loadedModels) if (ctx.cooldown > 0) ctx.cooldown--;
+}
+
+// Append one detection row: every model's current peak in its own fixed column,
+// with the models that actually fired highlighted. Newest row on top.
+function logDetectionRow(ts, thr, firedSet) {
+    let body = document.getElementById('mic-log-body');
+    if (!body) { renderMicLog(); body = document.getElementById('mic-log-body'); }
+    if (!body) return;
+    let cells = `<td class="lt-time">${ts}</td>`;
+    for (const ctx of loadedModels) {
+        const cls = firedSet.has(ctx) ? 'lt-hit' : (ctx.peak >= thr ? 'lt-over' : 'lt-lo');
+        cells += `<td class="${cls}">${ctx.peak.toFixed(3)}</td>`;
+    }
+    if (teacher && teacher.loaded)
+        cells += `<td class="lt-teacher">${teacherScore.toFixed(3)}</td>`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = cells;
+    body.insertBefore(tr, body.firstChild);
+    while (body.children.length > 60) body.removeChild(body.lastChild);
 }
 
 const WORKLET_SRC = `
@@ -1265,9 +1351,10 @@ registerProcessor('mic-processor', MicProcessor);
 `;
 
 document.getElementById('btn-mic-start').onclick = async () => {
-    if (!model) return;
+    if (!loadedModels.length) return;
     if (!Module) { alert('WASM not ready — wait a moment and try again.'); return; }
 
+    renderScoreCols();   // ensure a live column exists for every loaded model
     micReset();
     micFE      = Module._frontend_create();
     micFeatPtr = Module._malloc(NMELS * 2);  // uint16: 2 bytes per feature
@@ -1299,7 +1386,7 @@ document.getElementById('btn-mic-start').onclick = async () => {
         while (micLeftover.length >= STEP) {
             try {
                 const frame = micProcessStep(micLeftover.subarray(0, STEP));
-                if (frame) updateMicUI(micOnFrame(frame));
+                if (frame) micOnFrame(frame);
             } catch(e) { console.error('[mic] frame error:', e); }
             micLeftover = micLeftover.slice(STEP);
         }
@@ -1321,8 +1408,12 @@ document.getElementById('btn-mic-stop').onclick = () => {
     document.getElementById('btn-mic-stop').disabled  = true;
     document.getElementById('btn-mic-start').disabled = false;
     document.getElementById('btn-capture').disabled   = true;
-    document.getElementById('mic-score').textContent  = '—';
-    document.getElementById('mic-bar').style.width    = '0%';
+    for (const ctx of loadedModels) {
+        if (!ctx.el) continue;
+        ctx.el.num.textContent = '—';
+        ctx.el.bar.style.width = '0%';
+        ctx.el.bar.className   = 'bar';
+    }
     document.getElementById('mic-detected').textContent = '';
     document.getElementById('mic-tscore').textContent = '—';
     document.getElementById('mic-tbar').style.width    = '0%';
@@ -1366,6 +1457,7 @@ async function loadTeacherFromBytes(mel, emb, head) {
         teacher = t;
         badge.textContent = 'loaded'; badge.className = 'badge teacher-on';
         document.getElementById('teacher-col').style.display = '';
+        renderMicLog();   // add the teacher column to the detection-log header
         out.textContent =
             `teacher ready ✓\nwindow ${(Teacher.MIN_SAMPLES/Teacher.SR).toFixed(2)} s ` +
             `(${Teacher.MIN_SAMPLES} samp)\nscored live every ${TEACHER_THROTTLE_MS} ms`;
@@ -1458,20 +1550,26 @@ async function captureClip() {
     const pcm = ringLast(Math.min(ringLen, Math.round(CLIP_SECONDS * SR)));
     await clipAdd({
         ts: Date.now(), label: null, sr: SR, pcm,
-        sPeak: model ? studentScore : null,
+        mScores: loadedModels.map(c => ({ name: short(c.name), peak: c.peak })),
+        sPeak: primaryCtx() ? studentScore : null,
         tPeak: (teacher && teacher.loaded) ? teacherScore : null,
     });
     await renderClips();
 }
 
-// Re-score a stored clip with the CURRENTLY loaded student + teacher (peak over
-// the whole clip). Note: runs the student model, briefly perturbing a running
-// live session — it self-heals within ~1 s. Best used with the mic stopped.
+// Re-score a stored clip with ALL currently loaded models + teacher (peak over the
+// whole clip). Note: runs each model, briefly perturbing a running live session —
+// it self-heals within ~1 s. Best used with the mic stopped.
 async function rescoreClip(rec) {
     try {
         const res = runFrontend(rec.pcm);
-        if (res && model) { const { scores } = runInference(res.raw, res.T);
-            rec.sPeak = scores.length ? Math.max.apply(null, scores) : 0; }
+        if (res && loadedModels.length) {
+            rec.mScores = loadedModels.map(ctx => {
+                const { scores } = runInference(ctx, res.raw, res.T);
+                return { name: short(ctx.name), peak: scores.length ? Math.max.apply(null, scores) : 0 };
+            });
+            rec.sPeak = rec.mScores[0]?.peak ?? rec.sPeak;   // first model, for the filename
+        }
     } catch(e) { console.warn('[clip] student rescore failed:', e); }
     try {
         if (teacher && teacher.loaded) rec.tPeak = (await teacher.scoreTimeline(rec.pcm)).peak;
@@ -1512,7 +1610,6 @@ async function renderClips() {
     for (const c of clips) {
         const row = document.createElement('div'); row.className = 'clip-row';
         const t   = new Date(c.ts).toLocaleTimeString();
-        const s   = c.sPeak == null ? '—' : c.sPeak.toFixed(3);
         const tt  = c.tPeak == null ? '—' : c.tPeak.toFixed(3);
 
         const meta = document.createElement('span');
@@ -1531,7 +1628,13 @@ async function renderClips() {
 
         const sc = document.createElement('span');
         sc.className = 'csc';
-        sc.innerHTML = `S <b>${s}</b>&nbsp; T <i>${tt}</i>`;
+        if (Array.isArray(c.mScores) && c.mScores.length) {
+            sc.innerHTML = c.mScores.map(m => `${m.name} <b>${m.peak.toFixed(2)}</b>`).join('&nbsp; ') +
+                (c.tPeak == null ? '' : `&nbsp; T <i>${tt}</i>`);
+        } else {
+            const s = c.sPeak == null ? '—' : c.sPeak.toFixed(3);
+            sc.innerHTML = `S <b>${s}</b>&nbsp; T <i>${tt}</i>`;
+        }
         row.appendChild(sc);
 
         const play = document.createElement('button');
