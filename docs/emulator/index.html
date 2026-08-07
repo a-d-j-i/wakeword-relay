@@ -103,6 +103,32 @@
            position: sticky; top: 0; z-index: 1; }
   tr.hit td { background: #1a2a1a; }
   .progress { color: #888; font-size: 0.9em; margin: 6px 0; }
+
+  /* teacher (B5b) — teal accent to distinguish from the green student */
+  .bar.teacher    { background: #2aa; }
+  .bar.teacher.hit{ background: #6cf; }
+  .score-num.teacher { color: #2dd; }
+  .dual-row  { display: flex; gap: 26px; flex-wrap: wrap; }
+  .dual-col  { flex: 1 1 200px; min-width: 180px; }
+  .dual-col .who { color: #777; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.05em; }
+  .badge.teacher-on  { background: #14343a; color: #6cf; }
+
+  /* clip bank (B5a) */
+  #clipbank { margin-top: 18px; }
+  .clip-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  #clip-list { max-height: 300px; overflow-y: auto; }
+  .clip-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: #1e1e1e;
+              border-radius: 5px; margin-bottom: 3px; font-size: 0.82em; }
+  .clip-row .cts   { color: #888; flex: 0 0 auto; }
+  .clip-row .clbl  { flex: 0 0 auto; }
+  .clip-row .csc   { color: #999; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clip-row .csc b { color: #6f6; } .clip-row .csc i { color: #2dd; font-style: normal; }
+  .lbl-btn { background: none; border: 1px solid #444; color: #888; border-radius: 4px;
+             padding: 1px 7px; font-size: 0.9em; cursor: pointer; margin: 0; }
+  .lbl-btn.pos.on { background: #143a14; border-color: #2a5a2a; color: #6f6; }
+  .lbl-btn.neg.on { background: #3a1414; border-color: #5a2a2a; color: #f66; }
+  .clip-row .del { background: none; color: #555; border: none; cursor: pointer; font-size: 1em; padding: 0 4px; }
+  .clip-row .del:hover { color: #f55; }
 </style>
 </head>
 <body>
@@ -128,6 +154,20 @@
   <input type="checkbox" id="esp32-mode" style="vertical-align:middle"> ESP32 exact quant
 </label>
 <div id="esp32-qinfo" style="font-size:0.74em;color:#666;margin-top:3px"></div>
+
+<h3 style="margin-top:26px">
+  Teacher (A/B)
+  <span class="badge unloaded" id="teacher-badge">none</span>
+</h3>
+<label class="file-btn">
+  Load teacher ONNX
+  <input type="file" id="teacher-file" accept=".onnx" multiple>
+</label>
+<div style="font-size:0.74em;color:#666;margin-top:5px;line-height:1.5">
+  Pick the 3 files from <code>train_teacher.py</code>:<br>
+  melspectrogram · embedding_model · head <code>.onnx</code>
+</div>
+<pre id="out-teacher" style="margin-top:8px;font-size:0.76em;line-height:1.5">No teacher loaded.</pre>
 </div><!-- /col-left -->
 
 <!-- ══ RIGHT: wav + directory ═══════════════════════════════════════ -->
@@ -158,9 +198,18 @@
         <div id="mic-left">
           <div class="mic-label">mic input</div>
           <canvas id="mic-wave"></canvas>
-          <div class="mic-label">detection score</div>
-          <span class="score-num" id="mic-score">—</span>
-          <div class="bar-bg"><div class="bar" id="mic-bar"></div></div>
+          <div class="dual-row" style="margin-top:8px">
+            <div class="dual-col">
+              <div class="who">student</div>
+              <span class="score-num" id="mic-score">—</span>
+              <div class="bar-bg"><div class="bar" id="mic-bar"></div></div>
+            </div>
+            <div class="dual-col" id="teacher-col" style="display:none">
+              <div class="who">teacher</div>
+              <span class="score-num teacher" id="mic-tscore">—</span>
+              <div class="bar-bg"><div class="bar teacher" id="mic-tbar"></div></div>
+            </div>
+          </div>
           <div class="detected" id="mic-detected"></div>
         </div>
         <div id="mic-right">
@@ -171,6 +220,20 @@
       <div id="mic-spec-wrap">
         <div class="mic-label">mel spectrogram (10 ms/col, low freq = bottom)</div>
         <canvas id="mic-spec"></canvas>
+      </div>
+
+      <!-- ── Clip bank (B5a) — eval-only capture of live mic audio ── -->
+      <div id="clipbank">
+        <div class="mic-label">clip bank — captured mic audio (eval set, saved in this browser)</div>
+        <div class="clip-controls">
+          <button id="btn-capture" disabled title="Save the last ~2 s of mic audio">⧉ Capture last 2 s</button>
+          <label style="color:#aaa;font-size:0.82em;cursor:pointer">
+            <input type="checkbox" id="auto-capture" style="vertical-align:middle"> auto-capture on detection
+          </label>
+          <button id="btn-clips-dl" class="play-btn" title="Download all clips as WAV (zip-less; one file each)">⭳ Download all</button>
+          <button id="btn-clips-clear" class="play-btn" title="Delete every captured clip">Clear</button>
+        </div>
+        <div id="clip-list"><span style="color:#555;font-size:0.82em">No clips captured yet.</span></div>
       </div>
     </div>
   </div><!-- /section-mic -->
@@ -211,12 +274,16 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
 <script src="../common/web_trainer.js"></script>
+<script src="../common/teacher.js"></script>
 <script>
 'use strict';
 
 tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/wasm/');
 tf.setBackend('cpu');
+// onnxruntime-web WASM binaries (teacher B5b) — same CDN version as the loader above.
+if (window.ort) ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
 
 // ── globals ───────────────────────────────────────────────────────────────────
 let model  = null;
@@ -228,9 +295,10 @@ const SR    = 16000;
 const STEP  = 160;   // samples per frame step (10 ms) — matches kWindowStepMs=10
 const NMELS = 40;
 
-// Output scale: maps raw model output to [0,1].
-// Set dynamically on model load: 1.0 for UINT8 output (TFLite.js dequantizes to float [0,1]),
-// 1/256 for INT8/INT32 raw integer output.
+// Output scale: maps the raw model output to a probability in [0,1]. Set on model
+// load by output dtype (see loadModelBytes): 1.0 for FLOAT32 outputs (tf-tflite
+// returns the sigmoid float directly), else the quantized tensor's dequant scale
+// (1/256 for every uint8 model we ship — tf-tflite hands those back as raw ints).
 let OUT_SCALE = 1.0 / 256.0;
 
 // Input quantization. The MicroFrontend emits uint16 features; we map them to the
@@ -720,15 +788,51 @@ function parseTFLiteOutputType(ab) {
     }
 }
 
+// Parse the OUTPUT tensor's quantization (scale, zp) from the TFLite FlatBuffer.
+// Used to dequantize the raw integer the model emits when tf-tflite hands back
+// the quantized value instead of a float. Returns { scale, zp } or null.
+function parseTFLiteOutputQuant(ab) {
+    try {
+        const { u32, i32, f32, fld, deref, vec } = _makeFbHelpers(ab);
+        const modelRoot = u32(0);
+        const sgFld = fld(modelRoot, 2); if (!sgFld) return null;
+        const sg    = vec(sgFld);        if (sg.len === 0) return null;
+        const sg0   = deref(sg.base);
+        const outFld = fld(sg0, 2); if (!outFld) return null;   // SubGraph.outputs = field 2
+        const outV   = vec(outFld); if (outV.len === 0) return null;
+        const outIdx = i32(outV.base);
+        const tFld   = fld(sg0, 0); if (!tFld) return null;
+        const tVec   = vec(tFld);   if (outIdx >= tVec.len) return null;
+        const tens   = deref(tVec.base + outIdx * 4);
+        for (const fi of [5, 4]) {              // field 5 (custom) then 4 (standard)
+            const qFld = fld(tens, fi); if (!qFld) continue;
+            const q    = deref(qFld);
+            const sFld = fld(q, 2);     if (!sFld) continue;
+            const sv   = vec(sFld);     if (sv.len === 0) continue;
+            const scale = f32(sv.base);
+            if (!(scale > 0 && scale < 1)) continue;   // sigmoid uint8 ≈ 1/256
+            let zp = 0;
+            const zFld = fld(q, 3);
+            if (zFld) { const zv = vec(zFld); if (zv.len > 0) zp = i32(zv.base); }
+            return { scale, zp };
+        }
+        return null;
+    } catch(e) {
+        return null;
+    }
+}
+
 // ── IndexedDB ─────────────────────────────────────────────────────────────────
 // Stores: 'prefs' (key→value), 'models' (filename→ArrayBuffer).
 function _idb(fn) {
     return new Promise((res, rej) => {
-        const req = indexedDB.open('wakeWordTester', 2);
+        const req = indexedDB.open('wakeWordTester', 3);
         req.onupgradeneeded = e => {
             const db = e.target.result;
-            if (!db.objectStoreNames.contains('prefs'))  db.createObjectStore('prefs');
-            if (!db.objectStoreNames.contains('models')) db.createObjectStore('models');
+            if (!db.objectStoreNames.contains('prefs'))   db.createObjectStore('prefs');
+            if (!db.objectStoreNames.contains('models'))  db.createObjectStore('models');
+            if (!db.objectStoreNames.contains('teacher')) db.createObjectStore('teacher');
+            if (!db.objectStoreNames.contains('clips'))   db.createObjectStore('clips', { keyPath: 'id', autoIncrement: true });
         };
         req.onsuccess = e => { try { fn(e.target.result, res, rej); } catch(err) { rej(err); } };
         req.onerror = () => rej(req.error);
@@ -789,9 +893,18 @@ async function loadModelBytes(name, ab) {
         if (iq) { modelQuantScale = 1.0 / (25.6 * iq.scale); modelQuantZp = iq.zp; }
         else     { modelQuantScale = 1.0; modelQuantZp = -128; }
         applyQuantMode();   // sets active quantScale/quantZp (respects ESP32 toggle)
-        // TFLite.js dequantizes UINT8 output tensors to float [0,1] internally;
-        // for INT8/other types it returns the raw quantized integer.
-        OUT_SCALE = (oty === 'UINT8') ? 1.0 : 1.0 / 256.0;
+        // Output scaling, keyed off the output tensor dtype (deterministic, no probe):
+        //  • FLOAT32 output (some dev-era models): tf-tflite returns the sigmoid float
+        //    directly in [0,1] → OUT_SCALE = 1.0.
+        //  • quantized output (every model we ship: uint8, scale 1/256, zp 0):
+        //    tf-tflite hands back the raw integer 0..255 → scale by the tensor's own
+        //    dequant scale to recover the probability.
+        if (oty === 'FLOAT32') {
+            OUT_SCALE = 1.0;
+        } else {
+            const oq = parseTFLiteOutputQuant(ab);
+            OUT_SCALE = (oq && oq.scale) ? oq.scale : 1.0 / 256.0;
+        }
         inferOneFrame._count     = 0;
         inferOneFrame._errOnce   = false;
         inferOneFrame._lastScore = 0;
@@ -1070,6 +1183,9 @@ function micReset() {
     micCooldown = 0;
     micLeftover = new Float32Array(0);
     inferBuf    = null;   // flush rolling window so new session starts silent
+    ringReset();          // clear teacher/clip-capture audio history
+    teacherScore = 0;
+    updateTeacherUI(0);
     initMicSpec();
 }
 
@@ -1111,6 +1227,7 @@ function updateMicUI(score) {
     const thr   = parseFloat(thrSlider.value);
     const bar   = document.getElementById('mic-bar');
     const panel = document.getElementById('mic-panel');
+    studentScore = score;
     document.getElementById('mic-score').textContent = score.toFixed(4);
     bar.style.width = Math.min(100, score*100).toFixed(1) + '%';
     bar.className   = 'bar' + (score >= thr ? ' hit' : '');
@@ -1119,6 +1236,7 @@ function updateMicUI(score) {
         micCooldown = COOLDOWN_FRAMES;
         const ts = new Date().toLocaleTimeString();
         document.getElementById('mic-detected').textContent = `DETECTED  ${ts}  (${score.toFixed(3)})`;
+        if (document.getElementById('auto-capture').checked) captureClip();
         panel.classList.remove('flash'); void panel.offsetWidth;
         panel.classList.add('flash');
         setTimeout(() => panel.classList.remove('flash'), 600);
@@ -1172,6 +1290,7 @@ document.getElementById('btn-mic-start').onclick = async () => {
     worklet.port.onmessage = e => {
         if (!micRunning) return;
         drawWaveform(e.data);
+        ringPush(e.data);   // rolling audio for teacher scoring + clip capture
 
         const tmp = new Float32Array(micLeftover.length + e.data.length);
         tmp.set(micLeftover); tmp.set(e.data, micLeftover.length);
@@ -1190,6 +1309,8 @@ document.getElementById('btn-mic-start').onclick = async () => {
     micRunning = true;
     document.getElementById('btn-mic-start').disabled = true;
     document.getElementById('btn-mic-stop').disabled  = false;
+    document.getElementById('btn-capture').disabled   = false;
+    teacherLoop();   // no-op until a teacher is loaded + ring fills
 };
 
 document.getElementById('btn-mic-stop').onclick = () => {
@@ -1199,10 +1320,266 @@ document.getElementById('btn-mic-stop').onclick = () => {
     if (Module && micFeatPtr) { Module._free(micFeatPtr); micFeatPtr = null; }
     document.getElementById('btn-mic-stop').disabled  = true;
     document.getElementById('btn-mic-start').disabled = false;
+    document.getElementById('btn-capture').disabled   = true;
     document.getElementById('mic-score').textContent  = '—';
     document.getElementById('mic-bar').style.width    = '0%';
     document.getElementById('mic-detected').textContent = '';
+    document.getElementById('mic-tscore').textContent = '—';
+    document.getElementById('mic-tbar').style.width    = '0%';
 };
+
+// ════════════════════════════════════════════════════════════════════
+// 5. TEACHER (B5b) — openWakeWord-style teacher scored live alongside the student
+// ════════════════════════════════════════════════════════════════════
+let teacher      = null;   // Teacher instance (docs/common/teacher.js)
+let teacherScore = 0;      // latest live teacher score
+let teacherBusy  = false;  // guards the async scoring loop
+let studentScore = 0;      // latest live student score (stashed for clip capture)
+const TEACHER_THROTTLE_MS = 150;
+
+// IndexedDB helpers for teacher ONNX bytes ('mel'/'emb'/'head') + clip bank.
+function teacherGet(k)   { return _idb((db,res) => { const r=db.transaction('teacher').objectStore('teacher').get(k); r.onsuccess=()=>res(r.result??null); r.onerror=()=>res(null); }).catch(()=>null); }
+function teacherPut(k,v) { return _idb((db,res) => { const tx=db.transaction('teacher','readwrite'); tx.objectStore('teacher').put(v,k); tx.oncomplete=()=>res(); }); }
+function clipAdd(rec)    { return _idb((db,res) => { const tx=db.transaction('clips','readwrite'); tx.objectStore('clips').add(rec); tx.oncomplete=()=>res(); }); }
+function clipAll()       { return _idb((db,res) => { const r=db.transaction('clips').objectStore('clips').getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>res([]); }).catch(()=>[]); }
+function clipPut(rec)    { return _idb((db,res) => { const tx=db.transaction('clips','readwrite'); tx.objectStore('clips').put(rec); tx.oncomplete=()=>res(); }); }
+function clipDel(id)     { return _idb((db,res) => { const tx=db.transaction('clips','readwrite'); tx.objectStore('clips').delete(id); tx.oncomplete=()=>res(); }); }
+function clipClear()     { return _idb((db,res) => { const tx=db.transaction('clips','readwrite'); tx.objectStore('clips').clear(); tx.oncomplete=()=>res(); }); }
+
+// Map an ONNX filename to its slot. train_teacher.py exports these three names.
+function classifyTeacherFile(name) {
+    const n = name.toLowerCase();
+    if (n.includes('mel'))   return 'mel';
+    if (n.includes('embed')) return 'emb';
+    if (n.includes('head'))  return 'head';
+    return null;
+}
+
+async function loadTeacherFromBytes(mel, emb, head) {
+    const out   = document.getElementById('out-teacher');
+    const badge = document.getElementById('teacher-badge');
+    out.textContent = 'Loading teacher…';
+    try {
+        if (!window.Teacher || !window.ort) throw new Error('onnxruntime-web not loaded (serve via HTTP)');
+        const t = new Teacher();
+        await t.load({ mel, emb, head });
+        teacher = t;
+        badge.textContent = 'loaded'; badge.className = 'badge teacher-on';
+        document.getElementById('teacher-col').style.display = '';
+        out.textContent =
+            `teacher ready ✓\nwindow ${(Teacher.MIN_SAMPLES/Teacher.SR).toFixed(2)} s ` +
+            `(${Teacher.MIN_SAMPLES} samp)\nscored live every ${TEACHER_THROTTLE_MS} ms`;
+    } catch(e) {
+        out.textContent = 'ERROR: ' + e; teacher = null;
+        badge.textContent = 'error'; badge.className = 'badge wasm-err';
+        console.error('[teacher] load failed:', e);
+    }
+}
+
+document.getElementById('teacher-file').onchange = async e => {
+    const files = Array.from(e.target.files); e.target.value = '';
+    const parts = { mel: null, emb: null, head: null };
+    for (const f of files) {
+        const cls = classifyTeacherFile(f.name);
+        if (cls) parts[cls] = await f.arrayBuffer();
+    }
+    // Persist provided parts; fill any gaps from previously stored files so the
+    // three .onnx can be added across multiple picks.
+    for (const k of ['mel', 'emb', 'head']) {
+        if (parts[k]) await teacherPut(k, parts[k]);
+        else          parts[k] = await teacherGet(k);
+    }
+    if (parts.mel && parts.emb && parts.head)
+        await loadTeacherFromBytes(parts.mel, parts.emb, parts.head);
+    else
+        document.getElementById('out-teacher').textContent =
+            'Have: ' + ['mel','emb','head'].filter(k => parts[k]).join(', ') +
+            ' — still need: ' + ['mel','emb','head'].filter(k => !parts[k]).join(', ');
+};
+
+function updateTeacherUI(score) {
+    const thr = parseFloat(thrSlider.value);
+    const el  = document.getElementById('mic-tscore');
+    const bar = document.getElementById('mic-tbar');
+    if (!el || !bar) return;
+    el.textContent = score.toFixed(4);
+    bar.style.width = Math.min(100, score*100).toFixed(1) + '%';
+    bar.className   = 'bar teacher' + (score >= thr ? ' hit' : '');
+}
+
+// Async loop: while the mic runs, score the last ~2 s of audio with the teacher.
+// Throttled + self-guarded so a slow ONNX pass can't pile up or block the student.
+async function teacherLoop() {
+    if (!micRunning) return;
+    if (teacher && teacher.loaded && !teacherBusy && ringLen >= Teacher.MIN_SAMPLES) {
+        teacherBusy = true;
+        try {
+            teacherScore = await teacher.scoreClip(ringLast(Teacher.MIN_SAMPLES));
+            updateTeacherUI(teacherScore);
+        } catch(e) {
+            if (!teacherLoop._err) { teacherLoop._err = true; console.error('[teacher] score error:', e); }
+        }
+        teacherBusy = false;
+    }
+    if (micRunning) setTimeout(teacherLoop, TEACHER_THROTTLE_MS);
+}
+
+// ── Rolling audio ring buffer (shared: teacher scoring + clip capture) ────────
+const RING_SECONDS = 4;
+const RING_CAP     = RING_SECONDS * SR;
+let   micRing      = new Float32Array(RING_CAP);
+let   ringLen      = 0;
+function ringReset() { ringLen = 0; }
+function ringPush(chunk) {
+    let n = chunk.length, c = chunk;
+    if (n > RING_CAP) { c = chunk.subarray(n - RING_CAP); n = RING_CAP; }
+    if (ringLen + n > RING_CAP) {
+        const shift = ringLen + n - RING_CAP;
+        micRing.copyWithin(0, shift, ringLen);
+        ringLen -= shift;
+    }
+    micRing.set(c, ringLen);
+    ringLen += n;
+}
+function ringLast(nSamples) {
+    const n = Math.min(nSamples, ringLen);
+    return micRing.slice(ringLen - n, ringLen);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 6. CLIP BANK (B5a) — capture live mic audio into a browser-local eval set
+// ════════════════════════════════════════════════════════════════════
+const CLIP_SECONDS = 2;
+
+// Capture the last ~2 s of mic audio, tagged with the models' live scores.
+// Uses the live scores (no re-inference) so it never perturbs the running models.
+async function captureClip() {
+    if (ringLen < SR * 0.5) return;   // need at least ~0.5 s of audio
+    const pcm = ringLast(Math.min(ringLen, Math.round(CLIP_SECONDS * SR)));
+    await clipAdd({
+        ts: Date.now(), label: null, sr: SR, pcm,
+        sPeak: model ? studentScore : null,
+        tPeak: (teacher && teacher.loaded) ? teacherScore : null,
+    });
+    await renderClips();
+}
+
+// Re-score a stored clip with the CURRENTLY loaded student + teacher (peak over
+// the whole clip). Note: runs the student model, briefly perturbing a running
+// live session — it self-heals within ~1 s. Best used with the mic stopped.
+async function rescoreClip(rec) {
+    try {
+        const res = runFrontend(rec.pcm);
+        if (res && model) { const { scores } = runInference(res.raw, res.T);
+            rec.sPeak = scores.length ? Math.max.apply(null, scores) : 0; }
+    } catch(e) { console.warn('[clip] student rescore failed:', e); }
+    try {
+        if (teacher && teacher.loaded) rec.tPeak = (await teacher.scoreTimeline(rec.pcm)).peak;
+    } catch(e) { console.warn('[clip] teacher rescore failed:', e); }
+    await clipPut(rec);
+    await renderClips();
+}
+
+function clipBlob(rec) { return new Blob([encodeWav(rec.pcm, rec.sr || SR)], { type: 'audio/wav' }); }
+
+function playClip(rec, btn) {
+    if (_playBtn === btn) { _stopPlayback(); return; }
+    _stopPlayback();
+    const url = URL.createObjectURL(clipBlob(rec));
+    const a = new Audio(url);
+    a.onended = () => { URL.revokeObjectURL(url); _stopPlayback(); };
+    a.onerror = a.onended;
+    a.play();
+    _playAudio = a; _playBtn = btn;
+    btn.textContent = '■'; btn.classList.add('playing');
+}
+
+function setClipLabel(rec, lbl) {
+    rec.label = (rec.label === lbl) ? null : lbl;
+    clipPut(rec).then(renderClips);
+}
+
+async function renderClips() {
+    const clips = (await clipAll()).sort((a, b) => b.ts - a.ts);
+    const list  = document.getElementById('clip-list');
+    document.getElementById('btn-clips-dl').disabled    = !clips.length;
+    document.getElementById('btn-clips-clear').disabled = !clips.length;
+    if (!clips.length) {
+        list.innerHTML = '<span style="color:#555;font-size:0.82em">No clips captured yet.</span>';
+        return;
+    }
+    list.innerHTML = '';
+    for (const c of clips) {
+        const row = document.createElement('div'); row.className = 'clip-row';
+        const t   = new Date(c.ts).toLocaleTimeString();
+        const s   = c.sPeak == null ? '—' : c.sPeak.toFixed(3);
+        const tt  = c.tPeak == null ? '—' : c.tPeak.toFixed(3);
+
+        const meta = document.createElement('span');
+        meta.innerHTML = `<span class="cts">${t}</span>`;
+        row.appendChild(meta);
+
+        const pos = document.createElement('button');
+        pos.className = 'lbl-btn pos' + (c.label === 'pos' ? ' on' : '');
+        pos.textContent = '✓'; pos.title = 'Label positive (wake word present)';
+        pos.onclick = () => setClipLabel(c, 'pos');
+        const neg = document.createElement('button');
+        neg.className = 'lbl-btn neg' + (c.label === 'neg' ? ' on' : '');
+        neg.textContent = '✗'; neg.title = 'Label negative';
+        neg.onclick = () => setClipLabel(c, 'neg');
+        row.appendChild(pos); row.appendChild(neg);
+
+        const sc = document.createElement('span');
+        sc.className = 'csc';
+        sc.innerHTML = `S <b>${s}</b>&nbsp; T <i>${tt}</i>`;
+        row.appendChild(sc);
+
+        const play = document.createElement('button');
+        play.className = 'play-btn'; play.textContent = '▶'; play.title = 'Play';
+        play.onclick = () => playClip(c, play);
+        const re = document.createElement('button');
+        re.className = 'play-btn'; re.textContent = '↻'; re.title = 'Re-score with loaded models';
+        re.onclick = () => rescoreClip(c);
+        const del = document.createElement('button');
+        del.className = 'del'; del.textContent = '✕'; del.title = 'Delete';
+        del.onclick = () => clipDel(c.id).then(renderClips);
+        row.appendChild(play); row.appendChild(re); row.appendChild(del);
+
+        list.appendChild(row);
+    }
+}
+
+async function downloadAllClips() {
+    const clips = (await clipAll()).sort((a, b) => a.ts - b.ts);
+    for (const c of clips) {
+        const lbl  = c.label || 'unlabeled';
+        const iso  = new Date(c.ts).toISOString().replace(/[:.]/g, '-');
+        const tp   = c.tPeak == null ? 'na' : c.tPeak.toFixed(2);
+        const name = `${lbl}_${iso}_S${(c.sPeak ?? 0).toFixed(2)}_T${tp}.wav`;
+        const url  = URL.createObjectURL(clipBlob(c));
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        await new Promise(r => setTimeout(r, 150));
+        URL.revokeObjectURL(url);
+    }
+}
+
+document.getElementById('btn-capture').onclick    = () => captureClip();
+document.getElementById('btn-clips-dl').onclick   = () => downloadAllClips();
+document.getElementById('btn-clips-clear').onclick = () => {
+    if (confirm('Delete all captured clips?')) clipClear().then(renderClips);
+};
+const autoCapBox = document.getElementById('auto-capture');
+autoCapBox.onchange = () => prefSet('autoCapture', autoCapBox.checked);
+
+// ── Teacher + clip-bank restore on load ───────────────────────────────────────
+(async () => {
+    autoCapBox.checked = await prefGet('autoCapture', false);
+    await renderClips();
+    const mel = await teacherGet('mel'), emb = await teacherGet('emb'), head = await teacherGet('head');
+    if (mel && emb && head) await loadTeacherFromBytes(mel, emb, head);
+})();
 </script>
 </body>
 </html>
