@@ -42,15 +42,15 @@ STEPS="${STEPS:-45000}"
 NEG_CLASS_WEIGHT="${NEG_CLASS_WEIGHT:-22}"
 DISTILL="${DISTILL:-0}"
 DISTILL_WEIGHT="${DISTILL_WEIGHT:-0.5}"
-LANG_CODE="${LANG_CODE:-es}"                  # language of the speech negatives (tools/fetch_speech.py --lang)
+LANG_CODE="${LANG_CODE:-es}"                  # language of the speech negatives (train/tools/fetch_speech.py --lang)
 SPEECH_NEG_DIR="$DL/${LANG_CODE}_speech_16k"  # real-speech negatives for this language
 
 # Teacher negative audio (DISTILL=1 only). Music + ambient ALONE makes the teacher
 # fire on any speech — it never learns that non-wake speech is a negative (observed:
 # fires on "mi mamá me mima"). Add SPEECH negatives so it learns to reject it:
-#   $DL/piper_negatives_16k       — Piper hard negatives (tools/gen_piper_negatives.py):
+#   $DL/piper_negatives_16k       — Piper hard negatives (train/tools/gen_piper_negatives.py):
 #                                   confusables/partials, same voices as positives
-#   $DL/<lang>_speech_16k         — real speech (tools/fetch_speech.py, FLEURS/VoxPopuli):
+#   $DL/<lang>_speech_16k         — real speech (train/tools/fetch_speech.py, FLEURS/VoxPopuli):
 #                                   generalization beyond the TTS domain
 # All are auto-included when present. Override the whole list with
 # TEACHER_NEG_DIRS="dirA dirB".

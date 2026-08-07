@@ -5,7 +5,7 @@ for model training.  Clips arrive as HTTP POST with a WAV body and metadata head
 
 Usage:
     pip install flask
-    python tools/sample_server.py
+    python firmware/tools/sample_server.py
 
 Configure the ESP32 to POST to http://<this-machine>:5000/upload
 (set sample_upload_url in firmware/aivox3/secrets.yaml).

@@ -5,7 +5,7 @@
 # the openWakeWord backbone (melspectrogram + embedding_model) is identical across
 # phrases and copied once.
 #
-# Usage:  bash tools/collect_ab.sh [OUT_DIR]   (default: ./ab_models)
+# Usage:  bash train/tools/collect_ab.sh [OUT_DIR]   (default: ./ab_models)
 # Then in the emulator: "+ Add model" the .tflite files, "Load teacher ONNX" the
 # melspectrogram + embedding_model + matching <phrase>_head.onnx.
 set -euo pipefail

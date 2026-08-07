@@ -160,8 +160,8 @@ regardless), and `torch` is already a training dep. New pieces:
 
 The stock HuggingFace negative **spectrograms** (`negative_datasets/{speech,dinner_party,no_speech}`) are all **English** speech (LibriSpeech/VOiCES/CHiME-6/DiPCo/FMA/FSD50K/WHAM). So a non-English model never learns to reject ordinary target-language speech and false-fires on it. Two tools generate real target-language speech negatives:
 
-- **`tools/gen_piper_negatives.py`** — synthesizes non-wake / confusable phrases (e.g. `"chispa"`, `"buenas"`, `"mi mamá me mima"`) with the **same** Piper voices as the positives → `$DL/piper_negatives_16k`. No download; hard phonetic negatives.
-- **`tools/fetch_speech.py`** — streams real speech to 16 kHz WAVs → `$DL/<lang>_speech_16k`. `--lang es` picks an ungated, parquet-native source set (FLEURS + VoxPopuli) from a built-in `LANG_SOURCES` registry (`es/en/fr/de/it/pt/pl/nl`); override with `--source dataset:config`. **Common Voice / MLS are unusable** — they ship `datasets`-loading scripts, which `datasets` 5.x dropped. Decodes raw bytes with `soundfile` to avoid `torchcodec` (not installed).
+- **`train/tools/gen_piper_negatives.py`** — synthesizes non-wake / confusable phrases (e.g. `"chispa"`, `"buenas"`, `"mi mamá me mima"`) with the **same** Piper voices as the positives → `$DL/piper_negatives_16k`. No download; hard phonetic negatives.
+- **`train/tools/fetch_speech.py`** — streams real speech to 16 kHz WAVs → `$DL/<lang>_speech_16k`. `--lang es` picks an ungated, parquet-native source set (FLEURS + VoxPopuli) from a built-in `LANG_SOURCES` registry (`es/en/fr/de/it/pt/pl/nl`); override with `--source dataset:config`. **Common Voice / MLS are unusable** — they ship `datasets`-loading scripts, which `datasets` 5.x dropped. Decodes raw bytes with `soundfile` to avoid `torchcodec` (not installed).
 
 These feed **two** consumers:
 - **Teacher** — `run.sh` passes the speech dirs to `train_teacher.py --negatives_dirs` (env `TEACHER_NEG_DIRS` to override). Fixes the "teacher fires on any speech" problem.

@@ -9,10 +9,10 @@ SAME voices as the positives. Because positives and negatives share the TTS engi
 the teacher head can't cheat on synthesis artifacts and must learn the phrase itself.
 
 Stays within the "just Piper + public corpora" rule; no gated download. Use these
-alone, or alongside tools/fetch_commonvoice_es.py for real-speech generalization.
+alone, or alongside train/tools/fetch_speech.py for real-speech generalization.
 
 Usage (train/venv):
-    python tools/gen_piper_negatives.py \
+    python train/tools/gen_piper_negatives.py \
         --out /vms2/work_tmp/download/piper_negatives_16k \
         --voices_dir /vms2/work_tmp/download/piper_voices \
         --per_phrase 30
@@ -29,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_TRAIN_DIR = Path(__file__).resolve().parents[1] / "train"
+_TRAIN_DIR = Path(__file__).resolve().parents[1]  # train/ (this file is train/tools/)
 
 # Default Spanish negatives: everyday phrases + partials/confusables of the current
 # wake words ("chispa mágica" / "buenas noches"). Edit or pass --phrases_file.

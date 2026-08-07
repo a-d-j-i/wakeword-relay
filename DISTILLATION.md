@@ -5,8 +5,16 @@ synthetic data" approach with **knowledge distillation** from a large pretrained
 speech-embedding model (the *teacher*) into a microcontroller-sized model (the
 *student*), using our existing Piper-generated dataset.
 
-**Status:** implemented and in production for the openWakeWord-teacher path; the
-ASR-teacher path and the teacher→negatives soft-label edge are planned.
+**Status (2026-08-07): Path A A/B'd (mixed/marginal — §7); baseline shipped; next = Path B (§8).**
+The openWakeWord-teacher distillation is fully implemented and runs; the automated A/B
+(`train/tools/eval_ab.py`, two phrases) found it **helps one phrase and hurts the
+other** — marginal and confounded by single-run variance; the large real-world gain came
+from the **target-language speech negatives**, not the teacher. **Deployed: the baseline
+(λ=0) students** to `firmware/models/turn_{on,off}.tflite`, `probability_cutoff` 0.80
+(on-device tuning pending — eval cutoffs don't transfer, see §7 "Deployment state"). **No
+code removed** — the distillation path stays dormant (`DISTILL=0`) as scaffolding for the
+next step: **Path B (§8) — an ASR teacher that also soft-labels *negatives***, the one
+lever with real headroom. Read §7 (verdict) and §8 (plan) first.
 
 ---
 
@@ -657,7 +665,7 @@ Export, quantization, manifest: **unchanged** (§4.3 contract untouched).
 
 > **Status (2026-08-06): partially implemented as speech negatives (see CLAUDE.md
 > "Speech negatives").** Real-speech negatives now feed both teacher and student:
-> `tools/gen_piper_negatives.py` (Piper confusables) + `tools/fetch_speech.py`
+> `train/tools/gen_piper_negatives.py` (Piper confusables) + `train/tools/fetch_speech.py`
 > (real speech). **Corpus note:** the design below says "Common Voice es", but
 > Common Voice and MLS are unusable on `datasets` 5.x (they ship loading scripts,
 > which 5.x dropped) — the fetcher uses **FLEURS + VoxPopuli** (ungated,
@@ -734,11 +742,13 @@ Two parts:
 2. ~~B1 teacher (train + ONNX export)~~ **DONE** → ~~**B5b dual scoring in the
    emulator**~~ **DONE** → sanity gate on the B5a eval set ← **next: run this**
 3. ~~B2 + B3 minimal run (existing data only, λ=0.5) vs λ=0 baseline~~ — code
-   + `DISTILL=1 run.sh` DONE (baseline + distill tflites produced); the actual
-   A/B comparison on the B5a eval set is the open step
-4. If win → B4 mining + Common Voice; sweep λ; consider teacher temperature
-   (sharpen/soften scores) if the teacher is over/under-confident
-5. If big win → revisit Option A (§2) with the same scoring infrastructure
+   + `DISTILL=1 run.sh` DONE; **A/B DONE (2026-08-07, 2 phrases) → mixed/marginal,
+   see §7** (helped buenas_noches, hurt chispa_magica).
+4. ~~If win → B4 mining; sweep λ; teacher temperature~~ — **not pursued** (gain too
+   small/inconsistent to justify openWakeWord-teacher tuning)
+5. ~~If big win → revisit Option A~~ — **not pursued.** The remaining lever with
+   headroom is **Path B** (§3.9 ASR teacher, also soft-labeling negatives), not more
+   openWakeWord-teacher tuning.
 
 ## 6. Recommendation
 
@@ -751,3 +761,138 @@ device-captured or user-recorded audio in training, anywhere.
 If B wins, promote to **Option D** (build the reusable micro-embedder,
 Option A), which would make every future phrase a minutes-long head-training
 job instead of a 30k-step GPU run.
+
+## 7. Findings — Path-A verdict (2026-08-07): small, inconsistent, phrase-dependent
+
+Path A (openWakeWord `speech_embedding` teacher → soft **positive** labels) was run
+end-to-end and A/B'd against the plain student with `train/tools/eval_ab.py` on **two
+phrases**. **The result is mixed: distillation helped one phrase and hurt the other,
+with no consistent direction — a marginal effect, confounded by single-run training
+variance. It is not a clear win, and not worth adopting wholesale over the simpler
+baseline.**
+
+### Setup
+- Models per phrase: `<phrase>_sa/model_baseline` (λ=0) vs `model_distill` (λ=0.5),
+  both production-trained (SAMPLES=5000, STEPS=45000, NEG_CLASS_WEIGHT=22) with the
+  target-language speech negatives already in both. **One training run each — no seed
+  replication**, so within-phrase deltas below carry run-to-run noise.
+- Clips (Piper + real speech; faithful streaming via `inference.Model`, state reset
+  per clip, step_ms=10, 500 ms PCAN warm-up): 270 full-phrase positives, ~810–990
+  partials/confusables, 5×27 gapped positives, **8000 real Spanish-speech negatives**
+  (FLEURS + VoxPopuli). Partials are phrase-tailored, so partial-FA is comparable
+  **within** a phrase (baseline vs distill), not across phrases.
+
+### Result — at the deployment cutoff 0.90 (fair within-phrase: same clips)
+| phrase | model | pos recall | partial FA | FA/hour (real es speech) |
+|--------|----------|-----------|-----------|--------------------------|
+| chispa_magica | baseline | 78.1% | 10.3% | **0.59** |
+| chispa_magica | distill  | 78.5% |  8.9% | **3.21** |
+| buenas_noches | baseline | 74.8% |  6.7% | **0.86** |
+| buenas_noches | distill  | 76.7% |  2.7% | **0.78** |
+
+Peak-score margin (mean `pos_peak − partial_peak`, discrimination sharpness):
+- chispa: baseline **+0.656**, distill **+0.657** — identical (no gain).
+- buenas: baseline **+0.615**, distill **+0.698** — distill sharper.
+
+Matched-recall FA/hour (from `results.json`, usable low-FA regime, recall ≤~76%):
+- chispa: baseline ≈**0.27**/h vs distill ≈**0.90**/h → **baseline ~3× better**.
+- buenas: distill reaches ~76% recall at ≈**0.20**/h while baseline needs ~3/h →
+  **distill much better**.
+
+### Interpretation
+1. **Opposite verdicts across the two phrases.** For **chispa_magica**, distillation is
+   *worse*: ~5× the open-set false accepts at matched recall, no margin gain. For
+   **buenas_noches**, distillation *dominates baseline* at the deploy cutoff — higher
+   recall, better partial rejection (2.7% vs 6.7%), lower open-set FA, and a genuinely
+   larger margin. Same pipeline, same λ, same negatives — only the phrase differs.
+2. **So the effect is real but small and inconsistent.** This matches the on-device
+   hand-testing ("baseline ≈ distill"): the teacher soft-labels only *positives*, which
+   are already near 1, so any effect is second-order and easily swamped by which phrase
+   / which single training seed you happened to draw.
+3. **The dominant lever remains the negatives, not the teacher.** Both baselines are
+   already strong because of the target-language speech negatives (§B4 / CLAUDE.md
+   "Speech negatives"); distillation moves things by a phrase-dependent ±.
+4. **Gapped phrase is an architecture limit, not a distillation lever.** Recall falls
+   off with inter-word gap for *both* models (`eval_ab.py` gap-sweep) — the fixed
+   streaming receptive field, unrelated to distillation.
+
+### Decision
+- **Default to baseline for production** (`DISTILL=0`, the default): it's simpler, adds
+  no teacher-training phase, and it was the safer choice on the phrase where they
+  diverged most (chispa). **Exception, data-driven:** for a specific phrase where the
+  A/B shows distill clearly dominating (as buenas_noches did here), shipping that
+  phrase's `model_distill` is defensible — decide **per phrase from its own A/B**, not
+  globally.
+- **Do NOT invest further in openWakeWord-teacher tuning** on this evidence. The gain is
+  too small and noisy; separating signal from single-run variance would need multi-seed
+  runs, which isn't worth it versus the alternative below.
+- **Keep the soft-label plumbing** (the `clip_scorer` hook, `data.py` soft targets, the
+  `train.py` blend; λ=0 is byte-identical to baseline). It is teacher-agnostic
+  scaffolding for the higher-value **Path B — an ASR teacher that also soft-labels
+  *negatives*** (§3.9), which targets the one consistent failure mode across both
+  phrases (open-set false accepts on real speech) instead of the already-saturated
+  positives.
+
+> **Caveat on absolute numbers.** Positives are isolated Piper clips (PCAN warm-up
+> understates recall — see the isolated-clip note); trust the *within-phrase, model-vs-
+> model* deltas and the FA/hour (measured on 8000 real clips), not the absolute recall.
+
+### Deployment state (2026-08-07)
+- **Shipped: the baseline (λ=0) students.** `firmware/models/turn_on.tflite` ←
+  `chispa_magica_sa/model_baseline`, `turn_off.tflite` ← `buenas_noches_sa/model_baseline`.
+  (buenas distill was marginally better in the A/B, but the gain is too small/inconsistent
+  to justify carrying the teacher; baseline is the simpler, safer default.)
+- **`probability_cutoff` set to 0.80** in both manifests (up from 0.76), as a *safe*
+  first step for on-device FP-reduction. **The eval_ab cutoffs do NOT transfer to
+  firmware**: (a) ESPHome fires on the average of `sliding_window_size` (=5) model
+  outputs, which is lower than a single-frame peak; (b) eval positives are PCAN-
+  understated. So tune on-device: raise in ~0.02–0.03 steps until random fires stop,
+  back off if it starts missing (repeating the phrase once is the accepted trade). Only
+  on-device is authoritative for the absolute cutoff; eval_ab is for model-vs-model and
+  direction, not the number.
+- **No code was removed** (decision 2026-08-07): the whole distillation path stays in
+  place, dormant (`DISTILL=0` default; λ=0 ≡ baseline). It is the scaffolding for §8.
+
+## 8. Next step — Path B: ASR teacher that soft-labels **negatives**
+
+Path A's ceiling was structural: the openWakeWord teacher only soft-labels *positives*
+(already ≈1, no headroom) and it over-fires on speech, so it can't label negatives
+without circularity. **Path B fixes both** by swapping the teacher for a **pretrained
+Spanish ASR/CTC model used zero-shot** (still Option B — same MixedNet student, same
+B2/B3 hook, same blend; only the teacher changes; see §3.9). Because an ASR teacher
+scores *any* audio meaningfully (≈0 on non-phrase speech), it can label the **negatives**
+too — which is the one failure mode that was consistent across both phrases (open-set
+false accepts on real speech).
+
+**Reuses, unchanged (the dormant scaffolding):** `audio/spectrograms.py` `clip_scorer`
+hook, `microwakeword/data.py` soft-target loading of `teacher_scores.npy`,
+`microwakeword/train.py` `(1−λ)·hard+λ·soft` blend, the `--distill_weight` flag, and
+`train/tools/eval_ab.py` as the A/B harness. The teacher contract is one method,
+`score_clip(audio_f32)->float` — everything downstream is teacher-agnostic.
+
+**To build:**
+1. **`train/teacher_asr.py::AsrTeacher`** — `jonatasgrosman/wav2vec2-large-xlsr-53-spanish`
+   (HF `transformers`; new dep — `torch`/`torchaudio` already present; offline, size
+   irrelevant). `score_clip` via **forced alignment** (primary): slide a ~1.6 s window
+   (win 25600, hop 8000); per window `exp(−F.ctc_loss(logprobs, target_ids,
+   blank=pad_id)/len)` = P(phrase)∈(0,1]; take **max over windows** (mirrors the owww
+   teacher's max-over-windows so the two are comparable). Also a `fuzzy` mode behind
+   `--asr_score_mode {align,fuzzy}` (transcribe → `1 − norm_levenshtein(ipa(text),
+   ipa(target))`, espeak-ng IPA, **not** Soundex) as a cheap sanity baseline; default
+   `align`.
+2. **`train.py`** — replace the hardcoded owww `Teacher` import with a factory on new
+   flag `--teacher_type {owww,asr}` (default `owww` = Path A unchanged) + `--asr_model
+   --asr_score_mode`. **Extend the scoring hook to negatives:** route the raw negative
+   audio (`piper_negatives_16k`, `<lang>_speech_16k`) through the same `score_clip` and
+   write `teacher_scores.npy` beside the negative mmaps too (positives-only today). This
+   is where Path B beats Path A.
+3. **`run.sh`** — new `TEACHER_TYPE` env; write the ASR student to `model_distill_asr/`
+   alongside `model_baseline/` (and `model_distill/` owww) so all three coexist for a
+   clean three-way A/B (baseline vs distill-owww vs distill-asr).
+4. **Go/no-go gate before a full run:** score ~10 known positives + ~10 Spanish
+   negatives offline; confirm pos ≫ neg. Then `eval_ab.py` A/B (expect distill-asr to
+   cut open-set FA/hour at matched recall — the metric Path A couldn't move).
+
+**Not in scope / rejected:** more owww-teacher tuning (§7); Option A (§2). The emulator
+teacher panel stays owww-only (ASR is too big for the browser) — the real verdict is the
+three students in `eval_ab.py` on real speech.

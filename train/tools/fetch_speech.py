@@ -28,8 +28,8 @@ en_us; ~a few k clips/lang) and facebook/voxpopuli (plain ISO configs es/fr/de/â
 much larger, European-Parliament speech).
 
 Usage (run in train/venv):
-    python tools/fetch_speech.py --lang es --out /vms2/work_tmp/download/es_speech_16k --n 8000
-    python tools/fetch_speech.py --source google/fleurs:fr_fr --source facebook/voxpopuli:fr \
+    python train/tools/fetch_speech.py --lang es --out /vms2/work_tmp/download/es_speech_16k --n 8000
+    python train/tools/fetch_speech.py --source google/fleurs:fr_fr --source facebook/voxpopuli:fr \
         --out /vms2/work_tmp/download/fr_speech_16k --n 8000
 
 Re-runnable: numbering continues from existing files, so a second run (or a second
