@@ -21,6 +21,10 @@
   .bar    { height: 100%; width: 0%; background: #2a6; border-radius: 4px;
             transition: width 0.08s linear; }
   .bar.hit { background: #fa3; }
+  /* refractory (cooldown) — hatched slate = "blocked", can't re-trigger yet even
+     though the score may still be high */
+  .bar.cooling { background: repeating-linear-gradient(45deg,
+            #3a4152, #3a4152 5px, #4a5468 5px, #4a5468 10px); }
 
   /* mic detection panel */
   #mic-panel { background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
@@ -1297,8 +1301,17 @@ function updateMicUI() {
         if (!ctx.el) { /* column not built yet */ }
         else {
             ctx.el.num.textContent = ctx.peak.toFixed(4);
-            ctx.el.bar.style.width = Math.min(100, ctx.peak * 100).toFixed(1) + '%';
-            ctx.el.bar.className    = 'bar' + (ctx.peak >= thr ? ' hit' : '');
+            if (ctx.cooldown > 0) {
+                // Refractory: the model can't re-trigger yet. Repurpose the bar as a
+                // cooldown countdown (full when it just fired → drains to empty as the
+                // window expires) so there's persistent "blocked" feedback even when
+                // the live score has already dropped back to ~0.
+                ctx.el.bar.style.width = (100 * ctx.cooldown / COOLDOWN_FRAMES).toFixed(1) + '%';
+                ctx.el.bar.className   = 'bar cooling';
+            } else {
+                ctx.el.bar.style.width = Math.min(100, ctx.peak * 100).toFixed(1) + '%';
+                ctx.el.bar.className   = 'bar' + (ctx.peak >= thr ? ' hit' : '');
+            }
         }
         if (ctx.peak >= thr && ctx.cooldown === 0) fired.push(ctx);
     }
